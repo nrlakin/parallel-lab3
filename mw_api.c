@@ -26,6 +26,14 @@ void KillWorkers(int n_proc);
 void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f);
 void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
 
+typedef struct {
+  my_work_t * work_ptr;
+  my_result_t * result_ptr = NULL;
+  unsigned long job_id;
+  unsigned int job_status;
+  job_data_t * next_job;
+} job_data_t;
+
 // Helper function to pull next 'count' jobs off queue without running past end
 // of buffer.
 mw_work_t **get_next_job(mw_work_t **current_job, int count) {
