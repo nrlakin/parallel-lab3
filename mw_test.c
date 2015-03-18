@@ -13,8 +13,10 @@
 #include "mw_api.h"
 
 // Must be less than max int!
-#define VECTOR_LENGTH 1000000000
-#define N_JOBS  10000
+//#define VECTOR_LENGTH 1000000000
+//#define N_JOBS  10000
+#define VECTOR_LENGTH 10
+#define N_JOBS  3
 
 /***
 Given pointer to vector of doubles and vector length, calculate L2 norm
@@ -124,7 +126,7 @@ int serialize_jobs(struct userdef_work_t **start_job, int n_jobs, unsigned char 
   destPtr = *array;
   for(i = 0; i < n_jobs; i++) {
     if(*job == NULL) break;
-    destPtr = memcpy(destPtr, &((*job)->length), sizeof(long));
+    destPtr = memcpy(destPtr, &((*job)->length), sizeof(int));
     destPtr += sizeof(int);
     destPtr = memcpy(destPtr, (*job)->vector, sizeof(double) * (*job)->length);
     destPtr += sizeof(double) * (*job)->length;
