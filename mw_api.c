@@ -102,7 +102,7 @@ void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
   if (f->serialize_work(&(job_ptr->work_ptr), 1, &byte_stream, &length) == 0) {
     fprintf(stdout, "Error serializing work on master process.\n");
   }
-  fwrite(&length, 1, sizeof(unsigned int), jf_stream);
+  fwrite(&length, 1, sizeof(int), jf_stream);
   fwrite(byte_stream, 1, length, jf_stream);
   free(byte_stream);
   return;
@@ -110,22 +110,29 @@ void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
 
 long int ReadJob(FILE * jf_stream, long int offset, job_data_t **new_job, struct mw_api_spec *f) {
   long int bytes_read = 0;
+  unsigned long temp_job_id;
   int work_size;
   unsigned char *byte_stream;
+  fseek(jf_stream, offset, SEEK_SET);
+  bytes_read += fread(&temp_job_id, 1, sizeof(unsigned long), jf_stream);
+  if (bytes_read == 0)return 0;
+  printf("mallocing job node.\n");
   if (NULL == (*new_job = (job_data_t*) malloc(sizeof(job_data_t)))) {
     fprintf(stderr, "malloc failed initializing job queue...\n");
     return 0;
   };
-  fseek(jf_stream, offset, SEEK_SET);
-  bytes_read += fread(&((*new_job)->job_id), 1, sizeof(unsigned long), jf_stream);
-  bytes_read += fread(&work_size, 1, sizeof(unsigned int), jf_stream);
+  (*new_job)->job_id = temp_job_id;
+  bytes_read += fread(&work_size, 1, sizeof(int), jf_stream);
+  printf("reading file, mallocing byte stream\n");
+  printf("reading %d bytes.\n", work_size);
   if (NULL == (byte_stream = (unsigned char*) malloc(sizeof(unsigned char)*work_size))) {
     fprintf(stderr, "malloc failed allocating byte stream...\n");
     return 0;
   };
-  bytes_read += fread(byte_stream, 1, sizeof(unsigned char), jf_stream);
-  f->deserialize_work(&((*new_job)->work_ptr), byte_stream, work_size);
+  bytes_read += fread(byte_stream, 1, sizeof(unsigned char) * work_size,jf_stream);
+  f->deserialize_work2(&((*new_job)->work_ptr), byte_stream, work_size);
   free(byte_stream);
+  printf("bytes read: %ld\n", bytes_read);
   return bytes_read;
 }
 
@@ -133,7 +140,9 @@ job_data_t * RebuildJobQueue(struct mw_api_spec *f) {
   job_data_t *head, *job_ptr, *last_node = NULL;
   long int bytes_read, offset = 0;
   FILE * jf_stream;
+  printf("rebuilding job queue...\n");
   jf_stream = fopen("test.abc", "rb");
+  printf("opened file.\n");
   do {
     bytes_read = ReadJob(jf_stream, offset, &job_ptr, f);
     if (bytes_read != 0) {
@@ -200,7 +209,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
   // Master program.
   if (rank == 0) {
-    job_data_t * JobQueue, *job_d_ptr;
+    job_data_t * JobQueue, *job_d_ptr, *JobQueue2;
     int source;
     double start, end;
     // start timer
@@ -224,10 +233,10 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     printf ("wrote jobs to file.\n");
     ClearJobQueue(JobQueue);
     printf("cleared old job queue.\n");
-    JobQueue = RebuildJobQueue(f);
-    printf("first job_id: %ld\n", JobQueue->job_id);
+    JobQueue2 = RebuildJobQueue(f);
+    printf("first job_id: %ld\n", JobQueue2->job_id);
     //printf("first vector: %f\n", JobQueue->work_ptr->vector[0]);
-    job_d_ptr = JobQueue->next_job;
+    job_d_ptr = JobQueue2->next_job;
     printf("next job_id: %ld\n", job_d_ptr->job_id);
     //printf("next vector: %f\n", job_d_ptr->work_ptr->vector[0]);
 

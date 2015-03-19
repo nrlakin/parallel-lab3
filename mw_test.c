@@ -166,6 +166,25 @@ int deserialize_jobs(struct userdef_work_t **queue, unsigned char *array, int le
   return 1;
 }
 
+int deserialize_job(struct userdef_work_t **work_ptr, unsigned char *array, int len) {
+  struct userdef_work_t *jobPtr;
+  unsigned char *srcPtr = array;
+  if (NULL == (jobPtr = (struct userdef_work_t*)malloc(sizeof(struct userdef_work_t)))) {
+    printf ("malloc failed on alloc job struct...\n");
+    return 0;
+  };
+  memcpy(&(jobPtr->length), srcPtr, sizeof(int));
+  srcPtr += sizeof(int);
+  if (NULL == ((jobPtr->vector) = (double*)malloc(sizeof(double) * jobPtr->length))) {
+    printf ("malloc failed on allocating vector of len %d\n...", jobPtr->length);
+    return 0;
+  };
+  memcpy(jobPtr->vector, srcPtr, jobPtr->length * sizeof(double));
+  srcPtr += jobPtr->length * sizeof(double);
+  *work_ptr = jobPtr;
+  return 1;
+}
+
 // Convert n_jobs result structures into a byte array for transmission to another
 // process.  Simpler than serialize_work because the userdef_result_t structure
 // contains the actual result (not just a pointer).
@@ -274,6 +293,7 @@ int main(int argc, char **argv) {
   f.compute = compute_dot;
   f.serialize_work = serialize_jobs;
   f.deserialize_work = deserialize_jobs;
+  f.deserialize_work2 = deserialize_job;
   f.serialize_results = serialize_results;
   f.deserialize_results = deserialize_results;
   f.cleanup = cleanup;
