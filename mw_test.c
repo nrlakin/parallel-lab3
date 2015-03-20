@@ -135,6 +135,24 @@ int serialize_jobs(struct userdef_work_t **start_job, int n_jobs, unsigned char 
   return 1;
 }
 
+int serialize_job(struct userdef_work_t *jobPtr, unsigned char **array, int *len) {
+  int i, length=0;
+  unsigned char *destPtr;
+  if (jobPtr == NULL)return 0;    //no job to serialize
+  length = sizeof(int) + (sizeof(double) * jobPtr->length);
+  if (NULL == (*array = (unsigned char*)malloc(sizeof(unsigned char) * length))) {
+    printf ("malloc failed on send buffer...\n");
+    return 0;
+  }
+  destPtr = *array;
+  *len = length;
+  destPtr = memcpy(destPtr, &(jobPtr->length), sizeof(int));
+  destPtr += sizeof(int);
+  destPtr = memcpy(destPtr, jobPtr->vector, sizeof(double) * jobPtr->length);
+  destPtr += sizeof(double) * jobPtr->length;
+  return 1;
+}
+
 // Convert received byte array *array back to userdef_work_t structures.  len
 // gives size of received array in bytes; **queue points to next available spot
 // in work queue (if not, it will scan to the end).  Responsible for allocating
@@ -292,12 +310,13 @@ int main(int argc, char **argv) {
   f.result = dot_product_result;
   f.compute = compute_dot;
   f.serialize_work = serialize_jobs;
+  f.serialize_work2 = serialize_job;
   f.deserialize_work = deserialize_jobs;
   f.deserialize_work2 = deserialize_job;
   f.serialize_results = serialize_results;
   f.deserialize_results = deserialize_results;
   f.cleanup = cleanup;
-  f.jobs_per_packet = 5;
+  f.jobs_per_packet = 1;
 
   // Run job.
   MW_Run(argc, argv, &f);

@@ -32,6 +32,7 @@ void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f
 void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
 
 typedef struct job_data_t job_data_t;
+
 struct job_data_t {
   mw_work_t * work_ptr;
   mw_result_t * result_ptr;
@@ -39,6 +40,34 @@ struct job_data_t {
   unsigned int job_status;
   job_data_t * next_job;
 };
+
+// Note: will be faster if the queue ptr is at the end of the queue (not the start).
+void enqueue(job_data_t **queue, job_data_t *node) {
+  job_data_t *nodePtr = *queue;
+  // Scan to end of list if necessary
+  if (node == NULL) return;
+  if (*queue == NULL) {
+    *queue = node;
+  } else {
+    while(nodePtr->next_job != NULL) nodePtr = nodePtr->next_job;
+    nodePtr->next_job = node;
+  }
+  node->next_job = NULL;
+}
+
+job_data_t * dequeue(job_data_t **queue) {
+  if (*queue == NULL)return NULL;
+  job_data_t *node = *queue;
+  *queue = node->next_job;
+  node->next_job = NULL;
+  return node;
+}
+
+void move_job(job_data_t *in_queue, job_data_t *out_queue) {
+  job_data_t *node;
+  node = dequeue(&in_queue);
+  enqueue(&out_queue, node);
+}
 
 job_data_t * InitializeJobQueue(mw_work_t **work_queue) {
   mw_work_t **next_work = work_queue;
@@ -99,9 +128,10 @@ void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
   }
   printf("Serializing job_id %ld\n", job_ptr->job_id);
   fwrite(&(job_ptr->job_id), 1, sizeof(unsigned long), jf_stream);
-  if (f->serialize_work(&(job_ptr->work_ptr), 1, &byte_stream, &length) == 0) {
+  if (f->serialize_work2(job_ptr->work_ptr, &byte_stream, &length) == 0) {
     fprintf(stdout, "Error serializing work on master process.\n");
   }
+  printf("serialized job\n");
   fwrite(&length, 1, sizeof(int), jf_stream);
   fwrite(byte_stream, 1, length, jf_stream);
   free(byte_stream);
@@ -175,7 +205,8 @@ void WriteAllJobs(job_data_t *job_list, struct mw_api_spec *f) {
 void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f) {
   unsigned char *send_buffer;
   int length;
-  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
+//  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
+  if (f->serialize_work2(*first_job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
   }
   MPI_Send(send_buffer, length, MPI_UNSIGNED_CHAR, dest, TAG_COMPUTE, MPI_COMM_WORLD);
@@ -209,7 +240,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
   // Master program.
   if (rank == 0) {
-    job_data_t * JobQueue, *job_d_ptr, *JobQueue2;
+    job_data_t * JobQueue, *job_d_ptr, *JobQueue2, *next_job;
     int source;
     double start, end;
     // start timer
@@ -217,12 +248,14 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
     // Init work queues
     mw_work_t **work_queue = f->create(argc, argv);
-    mw_work_t **next_job = work_queue;
+    //mw_work_t **next_job = work_queue;
     mw_result_t *result_queue[MASTER_QUEUE_LENGTH];
     mw_result_t **next_result = result_queue;
     result_queue[0] = NULL;
 
     JobQueue = InitializeJobQueue(work_queue);
+    next_job = JobQueue;
+
     printf ("initialized job queue successfully.\n");
     printf("first job_id: %ld\n", JobQueue->job_id);
     //printf("first vector: %f\n", JobQueue->work_ptr->vector[0]);
@@ -242,8 +275,12 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
     // Worker status array.
     unsigned char worker_status[n_proc-1];
+    job_data_t *worker_queues[n_proc-1];
+    for (i=1; i<n_proc; i++)worker_queues[i] = NULL;
+
     // Initialize by giving tasks to all workers.
     for (i=1; i<n_proc; i++) {
+      
       SendWork(i, next_job, f->jobs_per_packet, f);
       next_job = get_next_job(next_job, f->jobs_per_packet);
       worker_status[i-1] = BUSY;
