@@ -70,18 +70,16 @@ void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
   }
   queuePtr->last = nodePtr;
   nodePtr->next_job = NULL;
-  queue->count++;
+  queuePtr->count++;
 }
 
 job_data_t * dequeue(job_queue_t *queuePtr) {
-  printf("as\n");
   if (queuePtr->first == NULL)return NULL;
-  printf("df\n");
   job_data_t *node = queuePtr->first;
   queuePtr->first = node->next_job;
   if (queuePtr->first == NULL) queuePtr->last = NULL;
   node->next_job = NULL;
-  queue->count--;
+  queuePtr->count--;
   return node;
 }
 
@@ -94,7 +92,7 @@ void move_job(job_queue_t *in_queuePtr, job_queue_t *out_queuePtr) {
 
 void assign_job(int dest, job_queue_t *workQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
   job_data_t *node;
-  node = dequeue(inQPtr);
+  node = dequeue(workQPtr);
   if (node == NULL) return;
   SendWork(dest, node->work_ptr, f);
   enqueue(workerQPtr, node);
@@ -107,14 +105,13 @@ void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
   while (*next_work != NULL) {
     if (NULL == (job_ptr = (job_data_t*) malloc(sizeof(job_data_t)))) {
       fprintf(stderr, "malloc failed initializing job queue...\n");
-      return NULL;
+      return;
     };
     job_ptr->work_ptr = *next_work++;
     job_ptr->result_ptr = NULL;
     job_ptr->job_id = job_id++;
     job_ptr->job_status = NOT_DONE;
     job_ptr->next_job = NULL;
-    last_node = job_ptr;
     enqueue(queuePtr, job_ptr);
   }
 }
@@ -271,6 +268,9 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
   if (rank == 0) {
     job_queue_t PendingQueue, DoneQueue;
     job_queue_t WorkerQueues[n_proc-1];
+    job_data_t *temp_job;
+    mw_result_t **result_queue;
+
     InitQueue(&PendingQueue);
     InitQueue(&DoneQueue);
     for (i=0; i< (n_proc-1); i++) InitQueue(&WorkerQueues[i]);
@@ -283,12 +283,11 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     // Init work queues
     mw_work_t **work_queue = f->create(argc, argv);
     //mw_work_t **next_job = work_queue;
-    mw_result_t *result_queue[MASTER_QUEUE_LENGTH];
-    mw_result_t **next_result = result_queue;
-    result_queue[0] = NULL;
+    //mw_result_t *result_queue[MASTER_QUEUE_LENGTH];
+    //mw_result_t **next_result = result_queue;
+    //result_queue[0] = NULL;
 
-    InitializeJobQueue(work_queue, &PendingQueue);
-    next_job = JobQueue;
+    InitializeJobQueue(&PendingQueue, work_queue);
 
     // Worker status array.
     unsigned char worker_status[n_proc-1];
@@ -310,24 +309,41 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       };
       MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, MPI_ANY_TAG, MPI_COMM_WORLD,
             &status);
-      if (f->deserialize_results(result_queue, receive_buffer, length) == 0) {
+      temp_job = dequeue(&WorkerQueues[source-1]);
+      if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
         fprintf(stderr, "Error deserializing results on process %d\n", rank);
         return;
       }
       free(receive_buffer);
+      enqueue(&DoneQueue, temp_job);
       worker_status[source-1] = IDLE;
-      if (queueEmpty(&PendingWork)) {
+      if (queueEmpty(&PendingQueue)) {
         for (i=0; i<n_proc-1; i++) {
           if (worker_status[i]==BUSY) break;
         }
         if (i == (n_proc-1)) break;
       } else {
-        assign_work(source, &PendingWork, &WorkerQueues[i-1], f);
+        assign_job(source, &PendingQueue, &WorkerQueues[i-1], f);
         worker_status[source-1] = BUSY;
       }
     }
     // Done; terminate worker threads and calculate result.
     KillWorkers(n_proc);
+
+    // Hacky: Generate temp result queue for now.
+    printf("completed jobs: %d\n", DoneQueue.count);
+    if (NULL == (result_queue = (mw_result_t**) malloc(sizeof(mw_result_t*) * DoneQueue.count))) {
+      fprintf(stderr, "malloc failed on process %d...", rank);
+      return;
+    };
+    job_data_t * temp = DoneQueue.first;
+    while (temp != NULL) {
+      *result_queue = temp->result_ptr;
+      result_queue++;
+      temp = temp->next_job;
+    }
+    // </hack>
+
     printf("Calculating result.\n");
     if (f->result(result_queue) == 0) {
       fprintf(stderr, "Error in user-defined result calculation.\n");

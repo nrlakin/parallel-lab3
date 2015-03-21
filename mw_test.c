@@ -243,7 +243,7 @@ int serialize_result(struct userdef_result_t *resultPtr, unsigned char **array, 
   };
   *len = length;
   destPtr = *array;
-  memcpy(destPtr, &(result->product), sizeof(double));
+  memcpy(destPtr, &(resultPtr->product), sizeof(double));
   return 1;
 }
 
