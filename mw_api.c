@@ -62,10 +62,16 @@ void InitQueue(job_queue_t * queue) {
 void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
   job_data_t *old_last = queuePtr->last;
   // Scan to end of list if necessary
-  if (nodePtr == NULL) return;
+  if (nodePtr == NULL) {
+    printf("Attempted to queue NULL node.\n");
+    return;
+  }
+  printf("In enqueue.\n");
   if (queuePtr->first == NULL) {
+    printf("Queue was empty\n.");
     queuePtr->first = nodePtr;
   } else {
+    printf("Queue wasn't empty...\n");
     old_last->next_job = nodePtr;
   }
   queuePtr->last = nodePtr;
@@ -74,12 +80,28 @@ void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
 }
 
 job_data_t * dequeue(job_queue_t *queuePtr) {
-  if (queuePtr->first == NULL)return NULL;
+  if (queuePtr->first == NULL) {
+    printf("Attempted dequeue of empty queue.\n");
+    return NULL;
+  }
   job_data_t *node = queuePtr->first;
   queuePtr->first = node->next_job;
   if (queuePtr->first == NULL) queuePtr->last = NULL;
   node->next_job = NULL;
   queuePtr->count--;
+  if(queuePtr->count == 0) {
+    printf("Queue emptied.\n");
+    if (queuePtr->first == NULL) {
+      printf("first node of empty queue is NULL\n");
+    } else {
+      printf("first node of empty queue is NOT NULL\n");
+    }
+    if (queuePtr->last == NULL) {
+      printf("last node of empty queue is NULL\n");
+    } else {
+      printf("last node of empty queue is NOT NULL\n");
+    }
+  }
   return node;
 }
 
@@ -94,8 +116,11 @@ void assign_job(int dest, job_queue_t *workQPtr, job_queue_t *workerQPtr, struct
   job_data_t *node;
   node = dequeue(workQPtr);
   if (node == NULL) return;
+  printf("sending work...\n");
   SendWork(dest, node->work_ptr, f);
+  printf("Sent. Adding job to worker queue.\n");
   enqueue(workerQPtr, node);
+  printf("Enqueued.\n");
 }
 
 void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
@@ -231,6 +256,7 @@ void WriteAllJobs(job_data_t *job_list, struct mw_api_spec *f) {
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
   unsigned char *send_buffer;
   int length;
+  printf("in SendWork\n");
 //  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
   if (f->serialize_work2(job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
@@ -303,6 +329,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
       MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
       source = status.MPI_SOURCE;
+      printf("Got result from process %d of length %d\n", source, length);
       if (NULL == (receive_buffer = (unsigned char*) malloc(sizeof(unsigned char) * length))) {
         fprintf(stderr, "malloc failed on process %d...\n", rank);
         return;
@@ -310,20 +337,25 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, MPI_ANY_TAG, MPI_COMM_WORLD,
             &status);
       temp_job = dequeue(&WorkerQueues[source-1]);
+      printf("deserializing job %ld.\n", temp_job->job_id);
       if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
         fprintf(stderr, "Error deserializing results on process %d\n", rank);
         return;
       }
       free(receive_buffer);
+      // Move job to DoneQueue.
       enqueue(&DoneQueue, temp_job);
       worker_status[source-1] = IDLE;
+
       if (queueEmpty(&PendingQueue)) {
+        printf("No more pending work\n");
         for (i=0; i<n_proc-1; i++) {
           if (worker_status[i]==BUSY) break;
         }
         if (i == (n_proc-1)) break;
       } else {
-        assign_job(source, &PendingQueue, &WorkerQueues[i-1], f);
+        printf("Assigning next job.\n");
+        assign_job(source, &PendingQueue, &WorkerQueues[source-1], f);
         worker_status[source-1] = BUSY;
       }
     }
@@ -332,16 +364,19 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
     // Hacky: Generate temp result queue for now.
     printf("completed jobs: %d\n", DoneQueue.count);
-    if (NULL == (result_queue = (mw_result_t**) malloc(sizeof(mw_result_t*) * DoneQueue.count))) {
+    if (NULL == (result_queue = (mw_result_t**) malloc(sizeof(mw_result_t*) * (DoneQueue.count+1)))) {
       fprintf(stderr, "malloc failed on process %d...", rank);
       return;
     };
+
     job_data_t * temp = DoneQueue.first;
+    mw_result_t ** resPtr = result_queue;
     while (temp != NULL) {
-      *result_queue = temp->result_ptr;
-      result_queue++;
+      *resPtr = temp->result_ptr;
+      resPtr++;
       temp = temp->next_job;
     }
+    *resPtr = NULL; //terminate
     // </hack>
 
     printf("Calculating result.\n");
