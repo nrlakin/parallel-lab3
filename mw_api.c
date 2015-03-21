@@ -25,14 +25,8 @@
 #define PENDING   0x02
 #define DONE      0x01
 
-/*** Local Prototypes ***/
-mw_work_t **get_next_job(mw_work_t **current_job, int count);
-void KillWorkers(int n_proc);
-void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f);
-void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
-
+/***  Local data structures ***/
 typedef struct job_data_t job_data_t;
-
 struct job_data_t {
   mw_work_t * work_ptr;
   mw_result_t * result_ptr;
@@ -41,53 +35,88 @@ struct job_data_t {
   job_data_t * next_job;
 };
 
-// Note: will be faster if the queue ptr is at the end of the queue (not the start).
-void enqueue(job_data_t **queue, job_data_t *node) {
-  job_data_t *nodePtr = *queue;
-  // Scan to end of list if necessary
-  if (node == NULL) return;
-  if (*queue == NULL) {
-    *queue = node;
-  } else {
-    while(nodePtr->next_job != NULL) nodePtr = nodePtr->next_job;
-    nodePtr->next_job = node;
-  }
-  node->next_job = NULL;
+typedef struct job_queue_t job_queue_t;
+struct job_queue_t {
+  job_data_t * first;
+  job_data_t * last;
+  int count;
+};
+
+/*** Local Prototypes ***/
+mw_work_t **get_next_job(mw_work_t **current_job, int count);
+void KillWorkers(int n_proc);
+//void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f);
+void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f);
+void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
+
+unsigned char queueEmpty(job_queue_t *queue) {
+  return (queue->count == 0);
 }
 
-job_data_t * dequeue(job_data_t **queue) {
-  if (*queue == NULL)return NULL;
-  job_data_t *node = *queue;
-  *queue = node->next_job;
+void InitQueue(job_queue_t * queue) {
+  queue->first = NULL;
+  queue->last = NULL;
+  queue->count = 0;
+}
+
+void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
+  job_data_t *old_last = queuePtr->last;
+  // Scan to end of list if necessary
+  if (nodePtr == NULL) return;
+  if (queuePtr->first == NULL) {
+    queuePtr->first = nodePtr;
+  } else {
+    old_last->next_job = nodePtr;
+  }
+  queuePtr->last = nodePtr;
+  nodePtr->next_job = NULL;
+  queue->count++;
+}
+
+job_data_t * dequeue(job_queue_t *queuePtr) {
+  printf("as\n");
+  if (queuePtr->first == NULL)return NULL;
+  printf("df\n");
+  job_data_t *node = queuePtr->first;
+  queuePtr->first = node->next_job;
+  if (queuePtr->first == NULL) queuePtr->last = NULL;
   node->next_job = NULL;
+  queue->count--;
   return node;
 }
 
-void move_job(job_data_t *in_queue, job_data_t *out_queue) {
+void move_job(job_queue_t *in_queuePtr, job_queue_t *out_queuePtr) {
   job_data_t *node;
-  node = dequeue(&in_queue);
-  enqueue(&out_queue, node);
+  node = dequeue(in_queuePtr);
+  if (node == NULL) return;
+  enqueue(out_queuePtr, node);
 }
 
-job_data_t * InitializeJobQueue(mw_work_t **work_queue) {
+void assign_job(int dest, job_queue_t *workQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
+  job_data_t *node;
+  node = dequeue(inQPtr);
+  if (node == NULL) return;
+  SendWork(dest, node->work_ptr, f);
+  enqueue(workerQPtr, node);
+}
+
+void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
   mw_work_t **next_work = work_queue;
-  job_data_t *head, *job_ptr, *last_node = NULL;
+  job_data_t *job_ptr;
   unsigned long job_id = 0;
   while (*next_work != NULL) {
     if (NULL == (job_ptr = (job_data_t*) malloc(sizeof(job_data_t)))) {
       fprintf(stderr, "malloc failed initializing job queue...\n");
       return NULL;
     };
-    if (last_node == NULL) head = job_ptr;
-    else last_node->next_job = job_ptr;
     job_ptr->work_ptr = *next_work++;
     job_ptr->result_ptr = NULL;
     job_ptr->job_id = job_id++;
     job_ptr->job_status = NOT_DONE;
     job_ptr->next_job = NULL;
     last_node = job_ptr;
+    enqueue(queuePtr, job_ptr);
   }
-  return head;
 }
 
 void ClearJobQueue(job_data_t * job_queue) {
@@ -202,11 +231,11 @@ void WriteAllJobs(job_data_t *job_list, struct mw_api_spec *f) {
 }
 
 // Send n_jobs to worker of rank 'dest'.
-void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f) {
+void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
   unsigned char *send_buffer;
   int length;
 //  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
-  if (f->serialize_work2(*first_job, &send_buffer, &length) == 0) {
+  if (f->serialize_work2(job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
   }
   MPI_Send(send_buffer, length, MPI_UNSIGNED_CHAR, dest, TAG_COMPUTE, MPI_COMM_WORLD);
@@ -240,7 +269,12 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
   // Master program.
   if (rank == 0) {
-    job_data_t * JobQueue, *job_d_ptr, *JobQueue2, *next_job;
+    job_queue_t PendingQueue, DoneQueue;
+    job_queue_t WorkerQueues[n_proc-1];
+    InitQueue(&PendingQueue);
+    InitQueue(&DoneQueue);
+    for (i=0; i< (n_proc-1); i++) InitQueue(&WorkerQueues[i]);
+
     int source;
     double start, end;
     // start timer
@@ -253,36 +287,15 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     mw_result_t **next_result = result_queue;
     result_queue[0] = NULL;
 
-    JobQueue = InitializeJobQueue(work_queue);
+    InitializeJobQueue(work_queue, &PendingQueue);
     next_job = JobQueue;
-
-    printf ("initialized job queue successfully.\n");
-    printf("first job_id: %ld\n", JobQueue->job_id);
-    //printf("first vector: %f\n", JobQueue->work_ptr->vector[0]);
-    job_d_ptr = JobQueue->next_job;
-    printf("next job_id: %ld\n", job_d_ptr->job_id);
-    //printf("next vector: %f\n", job_d_ptr->work_ptr->vector[0]);
-    WriteAllJobs(JobQueue,f);
-    printf ("wrote jobs to file.\n");
-    ClearJobQueue(JobQueue);
-    printf("cleared old job queue.\n");
-    JobQueue2 = RebuildJobQueue(f);
-    printf("first job_id: %ld\n", JobQueue2->job_id);
-    //printf("first vector: %f\n", JobQueue->work_ptr->vector[0]);
-    job_d_ptr = JobQueue2->next_job;
-    printf("next job_id: %ld\n", job_d_ptr->job_id);
-    //printf("next vector: %f\n", job_d_ptr->work_ptr->vector[0]);
 
     // Worker status array.
     unsigned char worker_status[n_proc-1];
-    job_data_t *worker_queues[n_proc-1];
-    for (i=1; i<n_proc; i++)worker_queues[i] = NULL;
 
     // Initialize by giving tasks to all workers.
     for (i=1; i<n_proc; i++) {
-      
-      SendWork(i, next_job, f->jobs_per_packet, f);
-      next_job = get_next_job(next_job, f->jobs_per_packet);
+      assign_job(i, &PendingQueue, &WorkerQueues[i-1], f);
       worker_status[i-1] = BUSY;
     }
 
@@ -303,14 +316,13 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       }
       free(receive_buffer);
       worker_status[source-1] = IDLE;
-      if (*next_job == NULL) {
+      if (queueEmpty(&PendingWork)) {
         for (i=0; i<n_proc-1; i++) {
           if (worker_status[i]==BUSY) break;
         }
         if (i == (n_proc-1)) break;
       } else {
-        SendWork(source, next_job, f->jobs_per_packet, f);
-        next_job = get_next_job(next_job, f->jobs_per_packet);
+        assign_work(source, &PendingWork, &WorkerQueues[i-1], f);
         worker_status[source-1] = BUSY;
       }
     }

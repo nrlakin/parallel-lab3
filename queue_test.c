@@ -13,38 +13,56 @@ struct job_data_t {
   job_data_t * next_job;
 };
 
-void enqueue(job_data_t **queue, job_data_t *node) {
-  job_data_t *nodePtr = *queue;
-  // Scan to end of list if necessary
-  if (node == NULL) return;
-  if (*queue == NULL) {
-    *queue = node;
-  } else {
-    while(nodePtr->next_job != NULL) nodePtr = nodePtr->next_job;
-    nodePtr->next_job = node;
-  }
-  node->next_job = NULL;
+struct job_queue_t {
+  job_data_t * first;
+  job_data_t * last;
+  int count;
+};
+
+typedef struct job_queue_t job_queue_t;
+
+void InitQueue(job_queue_t * queue) {
+  queue->first = NULL;
+  queue->last = NULL;
+  queue->count = 0;
 }
 
-job_data_t * dequeue(job_data_t **queue) {
+void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
+  job_data_t *old_last = queuePtr->last;
+  // Scan to end of list if necessary
+  if (nodePtr == NULL) return;
+  if (queuePtr->first == NULL) {
+    queuePtr->first = nodePtr;
+  } else {
+    old_last->next_job = nodePtr;
+  }
+  queuePtr->last = nodePtr;
+  nodePtr->next_job = NULL;
+}
+
+job_data_t * dequeue(job_queue_t *queuePtr) {
   printf("as\n");
-  if (*queue == NULL)return NULL;
+  if (queuePtr->first == NULL)return NULL;
   printf("df\n");
-  job_data_t *node = *queue;
-  *queue = node->next_job;
+  job_data_t *node = queuePtr->first;
+  queuePtr->first = node->next_job;
+  if (queuePtr->first == NULL) queuePtr->last = NULL;
   node->next_job = NULL;
   return node;
 }
 
-void move_job(job_data_t *in_queue, job_data_t *out_queue) {
+void move_job(job_queue_t *in_queuePtr, job_queue_t *out_queuePtr) {
   job_data_t *node;
-  node = dequeue(&in_queue);
-  enqueue(&out_queue, node);
+  node = dequeue(in_queuePtr);
+  enqueue(out_queuePtr, node);
 }
 
 int main(int argc, char **argv) {
-  job_data_t *queue = NULL;
-  job_data_t *queue2 = NULL;
+  job_queue_t queue;
+  job_queue_t queue2;
+
+  InitQueue(&queue);
+  InitQueue(&queue2);
 
   job_data_t *item1 = NULL;
   if (NULL == (item1 = (job_data_t*) malloc(sizeof(job_data_t)))) {
@@ -90,15 +108,15 @@ int main(int argc, char **argv) {
   enqueue(&queue, item1);
   enqueue(&queue, item2);
   enqueue(&queue, item3);
-  move_job(queue, queue2);
+  move_job(&queue, &queue2);
   printf("moving 0\n");
   thing = dequeue(&queue2);
   printf("first: %lu\n", thing->job_id);
-  move_job(queue, queue2);
+  move_job(&queue, &queue2);
   printf("moving 1\n");
   thing = dequeue(&queue2);
   printf("second: %lu\n", thing->job_id);
-  move_job(queue, queue2);
+  move_job(&queue, &queue2);
   printf("moving 2\n");
   thing = dequeue(&queue2);
   printf("third: %lu\n", thing->job_id);
@@ -106,7 +124,7 @@ int main(int argc, char **argv) {
   free(item1);
   free(item2);
   free(item3);
-  free(queue);
-  free(queue2);
+  //free(queue);
+  //free(queue2);
   return 0;
 }

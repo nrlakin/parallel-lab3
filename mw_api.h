@@ -27,7 +27,9 @@ struct mw_api_spec {
   int (*deserialize_work2) (mw_work_t **queue, unsigned char *array, int len);
   int (*serialize_work2) (mw_work_t *jobPtr, unsigned char **array, int *len);
   int (*serialize_results) (mw_result_t **start_result, int n_results, unsigned char **array, int *len);
+  int (*serialize_results2) (struct mw_result_t *resultPtr, unsigned char **array, int *len)
   int (*deserialize_results) (mw_result_t **queue, unsigned char *array, int len);
+  int (*deserialize_results2)(struct mw_result_t **resultPtrPtr, unsigned char *array, int len);
   int jobs_per_packet;
 };
 

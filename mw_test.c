@@ -232,6 +232,21 @@ int serialize_results(struct userdef_result_t **start_result, int n_results, uns
   return 1;
 }
 
+int serialize_result(struct userdef_result_t *resultPtr, unsigned char **array, int *len) {
+  int i, length=0;
+  unsigned char *destPtr;
+  if (resultPtr == NULL) return 0;
+  length = sizeof(double);
+  if (NULL == (*array = (unsigned char*)malloc(sizeof(unsigned char) * length))) {
+    printf ("malloc failed on send buffer...\n");
+    return 0;
+  };
+  *len = length;
+  destPtr = *array;
+  memcpy(destPtr, &(result->product), sizeof(double));
+  return 1;
+}
+
 // Convert received byte array *array back to userdef_t result structures.  len
 // gives size of received array in bytes; **queue points to next available spot
 // in result queue (if not, it will scan to the end).  Responsible for allocating
@@ -251,6 +266,18 @@ int deserialize_results(struct userdef_result_t **queue, unsigned char *array, i
     len-=sizeof(double);
   }
   *queue = NULL;
+  return 1;
+}
+
+int deserialize_result(struct userdef_result_t **resultPtrPtr, unsigned char *array, int len) {
+  struct userdef_result_t *resultPtr;
+  unsigned char *srcPtr = array;
+  if (NULL == (resultPtr = (struct userdef_result_t*)malloc(sizeof(struct userdef_result_t)))) {
+    printf ("malloc failed on receive buffer...\n");
+    return 0;
+  };
+  memcpy(&(resultPtr->product), srcPtr, sizeof(double));
+  *resultPtrPtr = resultPtr;
   return 1;
 }
 
@@ -314,7 +341,9 @@ int main(int argc, char **argv) {
   f.deserialize_work = deserialize_jobs;
   f.deserialize_work2 = deserialize_job;
   f.serialize_results = serialize_results;
+  f.serialize_results2 = serialize_result;
   f.deserialize_results = deserialize_results;
+  f.deserialize_results2 = deserialize_result;
   f.cleanup = cleanup;
   f.jobs_per_packet = 1;
 
