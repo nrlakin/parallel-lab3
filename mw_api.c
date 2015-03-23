@@ -312,7 +312,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
   MPI_Comm_size (MPI_COMM_WORLD, &n_proc);
   MPI_Comm_rank (MPI_COMM_WORLD, &rank);
 
-  srand(rank*1000000);
+  srand(rank*time(NULL));
   if (n_proc < 2) {
     fprintf(stderr, "Runtime Error: Master-Worker requires at least 2 processes.\n");
     return;
