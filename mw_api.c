@@ -72,7 +72,7 @@ unsigned char random_fail(void) {
   MPI_Comm_rank (MPI_COMM_WORLD, &rank);
   if (rank == 1) return 0;
   dice_roll = (double)rand() / RAND_MAX;
-  return (dice_roll > 0.995);
+  return (dice_roll > 0.9995);
 }
 
 void InitQueue(job_queue_t * queue) {
