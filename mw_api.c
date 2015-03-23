@@ -10,6 +10,7 @@
 #include <time.h>
 #include "mw_api.h"
 #include "uthash.h"
+#include "mw_queue.h"
 
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
@@ -21,28 +22,6 @@
 /*** Worker Status Codes ***/
 #define IDLE      0x00
 #define BUSY      0x01
-
-/***  Job Status Codes  ***/
-#define NOT_DONE  0x00
-#define PENDING   0x02
-#define DONE      0x01
-
-/***  Local data structures ***/
-typedef struct job_data_t job_data_t;
-struct job_data_t {
-  mw_work_t * work_ptr;
-  mw_result_t * result_ptr;
-  unsigned long job_id;
-  unsigned int job_status;
-  job_data_t * next_job;
-};
-
-typedef struct job_queue_t job_queue_t;
-struct job_queue_t {
-  job_data_t * first;
-  job_data_t * last;
-  int count;
-};
 
 /*** Local Prototypes ***/
 mw_work_t **get_next_job(mw_work_t **current_job, int count);
@@ -74,49 +53,6 @@ unsigned char random_fail(void) {
   if (rank == 1) return 0;
   dice_roll = (double)rand() / RAND_MAX;
   return (dice_roll > 0.9995);
-}
-
-void InitQueue(job_queue_t * queue) {
-  queue->first = NULL;
-  queue->last = NULL;
-  queue->count = 0;
-}
-
-void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
-  job_data_t *old_last = queuePtr->last;
-  // Scan to end of list if necessary
-  if (nodePtr == NULL) {
-    printf("Attempted to queue NULL node.\n");
-    return;
-  }
-  if (queuePtr->first == NULL) {
-    queuePtr->first = nodePtr;
-  } else {
-    old_last->next_job = nodePtr;
-  }
-  queuePtr->last = nodePtr;
-  nodePtr->next_job = NULL;
-  queuePtr->count++;
-}
-
-job_data_t * dequeue(job_queue_t *queuePtr) {
-  if (queuePtr->first == NULL) {
-    printf("Attempted dequeue of empty queue.\n");
-    return NULL;
-  }
-  job_data_t *node = queuePtr->first;
-  queuePtr->first = node->next_job;
-  if (queuePtr->first == NULL) queuePtr->last = NULL;
-  node->next_job = NULL;
-  queuePtr->count--;
-  return node;
-}
-
-void move_job(job_queue_t *in_queuePtr, job_queue_t *out_queuePtr) {
-  job_data_t *node;
-  node = dequeue(in_queuePtr);
-  if (node == NULL) return;
-  enqueue(out_queuePtr, node);
 }
 
 void assign_job(int dest, job_queue_t *pendingQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
@@ -158,7 +94,6 @@ void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
     job_ptr->work_ptr = *next_work++;
     job_ptr->result_ptr = NULL;
     job_ptr->job_id = job_id++;
-    job_ptr->job_status = NOT_DONE;
     job_ptr->next_job = NULL;
     enqueue(queuePtr, job_ptr);
   }
@@ -363,7 +298,6 @@ job_data_t * RebuildJobQueue(struct mw_api_spec *f) {
       if (last_node == NULL) head = job_ptr;
       else last_node->next_job = job_ptr;
       job_ptr->result_ptr = NULL;
-      job_ptr->job_status = NOT_DONE;
       job_ptr->next_job = NULL;
       last_node = job_ptr;
     }
@@ -437,9 +371,9 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     job_data_t *temp_job;
     mw_result_t **result_queue;
 
-    InitQueue(&PendingQueue);
-    InitQueue(&DoneQueue);
-    for (i=0; i< (n_proc-1); i++) InitQueue(&WorkerQueues[i]);
+    init_queue(&PendingQueue);
+    init_queue(&DoneQueue);
+    for (i=0; i< (n_proc-1); i++) init_queue(&WorkerQueues[i]);
 
     int source;
     double start, end;
