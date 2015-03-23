@@ -7,6 +7,7 @@
 #include <mpi.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 #include "mw_api.h"
 
 #define WORKER_QUEUE_LENGTH 1001
@@ -48,9 +49,30 @@ void KillWorkers(int n_proc);
 //void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f);
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f);
 void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
+int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
+unsigned char random_fail(void);
 
 unsigned char queueEmpty(job_queue_t *queue) {
   return (queue->count == 0);
+}
+
+int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm)
+{
+   if (random_fail()) {      MPI_Finalize();
+      exit (0);
+      return 0;
+   } else {
+      return MPI_Send (buf, count, datatype, dest, tag, comm);
+   }
+}
+
+unsigned char random_fail(void) {
+  double dice_roll;
+  int rank;
+  MPI_Comm_rank (MPI_COMM_WORLD, &rank);
+  if (rank == 1) return 0;
+  dice_roll = (double)rand() / RAND_MAX;
+  return (dice_roll > 0.995);
 }
 
 void InitQueue(job_queue_t * queue) {
@@ -66,12 +88,9 @@ void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
     printf("Attempted to queue NULL node.\n");
     return;
   }
-  printf("In enqueue.\n");
   if (queuePtr->first == NULL) {
-    printf("Queue was empty\n.");
     queuePtr->first = nodePtr;
   } else {
-    printf("Queue wasn't empty...\n");
     old_last->next_job = nodePtr;
   }
   queuePtr->last = nodePtr;
@@ -89,19 +108,6 @@ job_data_t * dequeue(job_queue_t *queuePtr) {
   if (queuePtr->first == NULL) queuePtr->last = NULL;
   node->next_job = NULL;
   queuePtr->count--;
-  if(queuePtr->count == 0) {
-    printf("Queue emptied.\n");
-    if (queuePtr->first == NULL) {
-      printf("first node of empty queue is NULL\n");
-    } else {
-      printf("first node of empty queue is NOT NULL\n");
-    }
-    if (queuePtr->last == NULL) {
-      printf("last node of empty queue is NULL\n");
-    } else {
-      printf("last node of empty queue is NOT NULL\n");
-    }
-  }
   return node;
 }
 
@@ -112,15 +118,31 @@ void move_job(job_queue_t *in_queuePtr, job_queue_t *out_queuePtr) {
   enqueue(out_queuePtr, node);
 }
 
-void assign_job(int dest, job_queue_t *workQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
+void assign_job(int dest, job_queue_t *pendingQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
   job_data_t *node;
-  node = dequeue(workQPtr);
+  node = dequeue(pendingQPtr);
   if (node == NULL) return;
-  printf("sending work...\n");
+  //printf("sending work...\n");
   SendWork(dest, node->work_ptr, f);
-  printf("Sent. Adding job to worker queue.\n");
+  //printf("Sent. Adding job to worker queue.\n");
   enqueue(workerQPtr, node);
-  printf("Enqueued.\n");
+  //printf("Enqueued.\n");
+}
+
+int steal_jobs(int src_proc, int dest_proc, job_queue_t *srcQ, job_queue_t **destQptr, struct mw_api_spec *f) {
+  job_queue_t *srcPtr = srcQ;
+  job_queue_t *destPtr = *destQptr;
+  if (!queueEmpty(destPtr)) {
+    printf("Warning: busy worker %d is stealing work...\n", dest_proc);
+  }
+  if (queueEmpty(srcPtr)) {
+    printf("Proc %d is stealing from proc %d, but src q is empty\n", dest_proc, src_proc);
+  }
+  // link queues
+  *destQptr = srcQ;
+  SendWork(dest_proc, srcPtr->first->work_ptr, f);
+  printf("Assigned %d's queue to %d.\n", src_proc, dest_proc);
+  return 0;
 }
 
 void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
@@ -256,7 +278,7 @@ void WriteAllJobs(job_data_t *job_list, struct mw_api_spec *f) {
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
   unsigned char *send_buffer;
   int length;
-  printf("in SendWork\n");
+  //printf("in SendWork\n");
 //  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
   if (f->serialize_work2(job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
@@ -272,7 +294,8 @@ void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_
   if (f->serialize_results(first_result, n_results, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing results.\n");
   }
-  MPI_Send(send_buffer, length, MPI_UNSIGNED_CHAR, 0, TAG_COMPUTE, MPI_COMM_WORLD);
+  //MPI_Send(send_buffer, length, MPI_UNSIGNED_CHAR, 0, TAG_COMPUTE, MPI_COMM_WORLD);
+  F_Send(send_buffer, length, MPI_UNSIGNED_CHAR, 0, TAG_COMPUTE, MPI_COMM_WORLD);
   free(send_buffer);
 }
 
@@ -281,10 +304,15 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
   unsigned char *receive_buffer;
   MPI_Status status;
 
+  // Seed random # generator for failure testing
+  //srand(time(NULL));
+
+
   // Get environment variables.
   MPI_Comm_size (MPI_COMM_WORLD, &n_proc);
   MPI_Comm_rank (MPI_COMM_WORLD, &rank);
 
+  srand(rank*1000000);
   if (n_proc < 2) {
     fprintf(stderr, "Runtime Error: Master-Worker requires at least 2 processes.\n");
     return;
@@ -294,6 +322,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
   if (rank == 0) {
     job_queue_t PendingQueue, DoneQueue;
     job_queue_t WorkerQueues[n_proc-1];
+    job_queue_t *WorkerQPtrs[n_proc-1];
     job_data_t *temp_job;
     mw_result_t **result_queue;
 
@@ -320,7 +349,8 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
     // Initialize by giving tasks to all workers.
     for (i=1; i<n_proc; i++) {
-      assign_job(i, &PendingQueue, &WorkerQueues[i-1], f);
+      WorkerQPtrs[i-1] = &WorkerQueues[i-1];    //match ptrs
+      assign_job(i, &PendingQueue, WorkerQPtrs[i-1], f);
       worker_status[i-1] = BUSY;
     }
 
@@ -329,33 +359,40 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
       MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
       source = status.MPI_SOURCE;
-      printf("Got result from process %d of length %d\n", source, length);
+      //printf("Got result from process %d of length %d\n", source, length);
       if (NULL == (receive_buffer = (unsigned char*) malloc(sizeof(unsigned char) * length))) {
         fprintf(stderr, "malloc failed on process %d...\n", rank);
         return;
       };
       MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, MPI_ANY_TAG, MPI_COMM_WORLD,
             &status);
-      temp_job = dequeue(&WorkerQueues[source-1]);
-      printf("deserializing job %ld.\n", temp_job->job_id);
+      temp_job = dequeue(WorkerQPtrs[source-1]);
+      //printf("deserializing job %ld.\n", temp_job->job_id);
       if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
         fprintf(stderr, "Error deserializing results on process %d\n", rank);
         return;
       }
       free(receive_buffer);
       // Move job to DoneQueue.
+      if (temp_job == NULL) {
+        printf("null result from %d\n", source);
+      }
       enqueue(&DoneQueue, temp_job);
       worker_status[source-1] = IDLE;
 
       if (queueEmpty(&PendingQueue)) {
         printf("No more pending work\n");
         for (i=0; i<n_proc-1; i++) {
-          if (worker_status[i]==BUSY) break;
+          if (!queueEmpty(&WorkerQueues[i])) break;
+          //if (worker_status[i]==BUSY) break;
         }
         if (i == (n_proc-1)) break;
+        else {
+          steal_jobs(i+1, source, &WorkerQueues[i], &WorkerQPtrs[source-1], f);
+        }
       } else {
-        printf("Assigning next job.\n");
-        assign_job(source, &PendingQueue, &WorkerQueues[source-1], f);
+        //printf("Assigning next job.\n");
+        assign_job(source, &PendingQueue, WorkerQPtrs[source-1], f);
         worker_status[source-1] = BUSY;
       }
     }
@@ -445,6 +482,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       *next_result = NULL;
       count = 0;
     }
+    printf("Worker %d signing off.\n", rank);
     // free any dynamically allocated worker structures here.
   }
 }
