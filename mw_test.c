@@ -322,6 +322,17 @@ int cleanup(struct userdef_work_t **work, struct userdef_result_t **results) {
   return 1;
 }
 
+int clean_work(struct userdef_work_t *work) {
+  free(work->vector);
+  free(work);
+  return 1;
+}
+
+int clean_result(struct userdef_result_t *result) {
+  free(result);
+  return 1;
+}
+
 int main(int argc, char **argv) {
   struct mw_api_spec f;
   struct userdef_work_t **master_queue;
@@ -345,6 +356,8 @@ int main(int argc, char **argv) {
   f.deserialize_results = deserialize_results;
   f.deserialize_results2 = deserialize_result;
   f.cleanup = cleanup;
+  f.clean_work = clean_work;
+  f.clean_result = clean_result;
   f.jobs_per_packet = 1;
 
   // Run job.
