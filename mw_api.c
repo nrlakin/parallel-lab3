@@ -367,10 +367,12 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, MPI_ANY_TAG, MPI_COMM_WORLD,
             &status);
       temp_job = dequeue(WorkerQPtrs[source-1]);
-      //printf("deserializing job %ld.\n", temp_job->job_id);
-      if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
-        fprintf(stderr, "Error deserializing results on process %d\n", rank);
-        return;
+      if (temp_job != NULL) {
+        //printf("deserializing job %ld.\n", temp_job->job_id);
+        if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
+          fprintf(stderr, "Error deserializing results on process %d\n", rank);
+          return;
+        }
       }
       free(receive_buffer);
       // Move job to DoneQueue.
