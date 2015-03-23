@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <time.h>
 #include "mw_api.h"
+#include "uthash.h"
 
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
@@ -239,6 +240,116 @@ long int ReadJob(FILE * jf_stream, long int offset, job_data_t **new_job, struct
   return bytes_read;
 }
 
+void WriteResult(FILE * jf_stream, job_data_t *job_ptr, unsigned char *byte_stream, int length) {
+  FILE * jf_stream;
+  // NEED TO OVERWRITE FIRST RUN
+  jf_stream = fopen("results.txt", "ab");
+
+  if (jf_stream == NULL) {
+    fprintf(stderr, "Error writing to job file.\n");
+    exit(1);
+  }
+  fwrite(&(job_ptr->job_id), 1, sizeof(unsigned long), jf_stream);
+  fwrite(&length, 1, sizeof(int), jf_stream);
+  fwrite(byte_stream, 1, length, jf_stream);
+  fclose(jf_stream);
+  return;
+}
+
+long int ReadResult(FILE * jf_stream, long int offset, job_data_t **new_job, struct mw_api_spec *f) {
+  long int bytes_read = 0;
+  unsigned long temp_job_id;
+  int result_size;
+  unsigned char *byte_stream;
+  fseek(jf_stream, offset, SEEK_SET);
+  bytes_read += fread(&temp_job_id, 1, sizeof(unsigned long), jf_stream);
+  if (bytes_read == 0) return 0;
+  printf("mallocing job node.\n");
+  if (NULL == (*new_job = (job_data_t*) malloc(sizeof(job_data_t)))) {
+    fprintf(stderr, "malloc failed initializing job queue...\n");
+    return 0;
+  };
+  (*new_job)->job_id = temp_job_id;
+  bytes_read += fread(&result_size, 1, sizeof(int), jf_stream);
+  printf("reading file, mallocing byte stream\n");
+  printf("reading %d bytes.\n", result_size);
+  if (NULL == (byte_stream = (unsigned char*) malloc(sizeof(unsigned char)*result_size))) {
+    fprintf(stderr, "malloc failed allocating byte stream...\n");
+    return 0;
+  };
+  bytes_read += fread(byte_stream, 1, sizeof(unsigned char) * result_size, jf_stream);
+  f->deserialize_results2(&((*new_job)->result_ptr), byte_stream, result_size);
+  free(byte_stream);
+  printf("bytes read: %ld\n", bytes_read);
+  return bytes_read;
+}
+
+// Hash Table Stuff
+struct my_struct {
+    int id;                    /* key */
+    int count;
+    UT_hash_handle hh;         /* makes this structure hashable */
+};
+
+struct my_struct *ids = NULL;
+
+void add_id(int input_id, int count) {
+    struct my_struct *s;
+
+    HASH_FIND_INT(ids, &input_id, s);  /* id already in the hash? */
+    if (s==NULL) {
+      s = (struct my_struct*)malloc(sizeof(struct my_struct));
+      s->id = input_id;
+      HASH_ADD_INT( ids, id, s );  /* id: count of key field */
+    }
+    strcpy(s->count, count);
+}
+
+struct my_struct *find_id(int input_id) {
+    struct my_struct *s;
+
+    HASH_FIND_INT( ids, &input_id, s );  /* s: output pointer */
+    return s;
+}
+
+void delete_id(struct my_struct *id) {
+    HASH_DEL( ids, id);  /* id: pointer to delete */
+    free(id);
+}
+
+void delete_all() {
+  struct my_struct *current_id, *tmp;
+
+  HASH_ITER(hh, ids, current_id, tmp) {
+    HASH_DEL(ids,current_id);  /* delete it (ids advances to next) */
+    free(current_id);            /* free it */
+  }
+}
+// END Hash Table Stuff
+
+job_data_t * RebuildWorkQueue(struct mw_api_spec *f) {
+  job_data_t *head, *job_ptr, *last_node = NULL;
+  long int bytes_read, offset = 0;
+  FILE * jf_stream;
+  printf("rebuilding job queue...\n");
+  jf_stream = fopen("test.abc", "rb");
+  printf("opened file.\n");
+  do {
+    bytes_read = ReadJob(jf_stream, offset, &job_ptr, f);
+    if (bytes_read != 0) {
+      if (last_node == NULL) head = job_ptr;
+      else last_node->next_job = job_ptr;
+      job_ptr->result_ptr = NULL;
+      job_ptr->job_status = NOT_DONE;
+      job_ptr->next_job = NULL;
+      last_node = job_ptr;
+    }
+    offset += bytes_read;
+  } while(bytes_read != 0);
+  fclose(jf_stream);
+  return head;
+}
+
 job_data_t * RebuildJobQueue(struct mw_api_spec *f) {
   job_data_t *head, *job_ptr, *last_node = NULL;
   long int bytes_read, offset = 0;
@@ -279,7 +390,7 @@ void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
   unsigned char *send_buffer;
   int length;
   //printf("in SendWork\n");
-//  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
+  //  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
   if (f->serialize_work2(job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
   }
