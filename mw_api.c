@@ -38,40 +38,32 @@ unsigned char queueEmpty(job_queue_t *queue) {
 
 // BEGIN Hash Table Stuff
 struct my_struct {
-  int id;                    /* key */
+  unsigned long id;                    /* key */
   int count;
   UT_hash_handle hh;         /* makes this structure hashable */
 };
 
 struct my_struct *ids = NULL;
 
-void add_id(int input_id, int count) {
+void add_id(unsigned long input_id, int count) {
   struct my_struct *s;
-
-  HASH_FIND_INT(ids, &input_id, s);  /* id already in the hash? */
+  HASH_FIND(ids, &input_id, s);  /* id already in the hash? */
   if (s==NULL) {
     s = (struct my_struct*)malloc(sizeof(struct my_struct));
     s->id = input_id;
-    HASH_ADD_INT( ids, id, s );  /* id: count of key field */
+    HASH_ADD( ids, id, s );  /* id: count of key field */
   }
   strcpy(s->count, count);
 }
 
-struct my_struct *find_id(int input_id) {
+struct my_struct *find_id(unsigned long input_id) {
   struct my_struct *s;
-
-  HASH_FIND_INT( ids, &input_id, s );  /* s: output pointer */
+  HASH_FIND( ids, &input_id, s );  /* s: output pointer */
   return s;
-}
-
-void delete_id(struct my_struct *id) {
-  HASH_DEL( ids, id);  /* id: pointer to delete */
-  free(id);
 }
 
 void delete_all() {
   struct my_struct *current_id, *tmp;
-
   HASH_ITER(hh, ids, current_id, tmp) {
     HASH_DEL(ids,current_id);  /* delete it (ids advances to next) */
     free(current_id);            /* free it */
@@ -265,60 +257,44 @@ long int ReadResult(FILE * jf_stream, long int offset, job_data_t **new_job, str
   return bytes_read;
 }
 
-// job_data_t * RebuildJobQueue(struct mw_api_spec *f) {
-//   job_data_t *head, *job_ptr, *last_node = NULL;
-//   long int bytes_read, offset = 0;
-//   FILE * jf_stream;
-//   printf("rebuilding job queue...\n");
-//   jf_stream = fopen("test.abc", "rb");
-//   printf("opened file.\n");
-//   do {
-//     bytes_read = ReadJob(jf_stream, offset, &job_ptr, f);
-//     if (bytes_read != 0) {
-//       if (last_node == NULL) head = job_ptr;
-//       else last_node->next_job = job_ptr;
-//       job_ptr->result_ptr = NULL;
-//       job_ptr->next_job = NULL;
-//       last_node = job_ptr;
-//     }
-//     offset += bytes_read;
-//   } while(bytes_read != 0);
-//   fclose(jf_stream);
-//   return head;
-// }
-
-void RebuildPendingResults(job_queue_t *pendingPtr, job_queue_t *resultsPtr, struct mw_api_spec *f) {
+void RebuildQueues(job_queue_t *pendingPtr, job_queue_t *resultsPtr, struct mw_api_spec *f) {
   long int bytes_read, offset = 0;
-  FILE * results_jf_stream;
+  FILE * jf_stream;
   printf("rebuilding done queue...\n");
-  results_jf_stream = fopen("results.txt", "rb");
+  jf_stream = fopen("results.txt", "rb");
   printf("opened file.\n");
-  job_data_t *new_result;
+  job_data_t *new_job;
   do {
-    bytes_read = ReadResult(results_jf_stream, offset, &new_result, f);
-    enqueue(resultPtr, new_result);
-
+    bytes_read = ReadResult(jf_stream, offset, &new_job, f);
+    if (bytes_read != 0) {
+      printf("adding to queue.\n");
+      enqueue(resultPtr, new_job);
+      printf("adding to hash.\n");
+      add_id(new_job->job_id, 1);
+    }
     offset += bytes_read;
   } while(bytes_read != 0);
-  fclose(results_jf_stream);
-  return head;
-}
+  fclose(jf_stream);
 
-void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
-  mw_work_t **next_work = work_queue;
-  job_data_t *job_ptr;
-  unsigned long job_id = 0;
-  while (*next_work != NULL) {
-    if (NULL == (job_ptr = (job_data_t*) malloc(sizeof(job_data_t)))) {
-      fprintf(stderr, "malloc failed initializing job queue...\n");
-      return;
-    };
-    job_ptr->work_ptr = *next_work++;
-    job_ptr->result_ptr = NULL;
-    job_ptr->job_id = job_id++;
-    job_ptr->next_job = NULL;
-    enqueue(queuePtr, job_ptr);
-  }
+  printf("rebuilding pending queue...\n");
+  jf_stream = fopen("pool.txt", "rb");
+  printf("opened file.\n");
+  job_data_t *new_job;
+  offset = 0;
+  bytes_read = 0;
+  do {
+    bytes_read = ReadJob(jf_stream, offset, &new_job, f);
+    if (bytes_read != 0) {
+      printf("checking hash.\n");
+      if (find_id(new_job->job_id) != NULL) {
+        enqueue(pendingPtr, new_job);
+      }
+    }
+    offset += bytes_read;
+  } while(bytes_read != 0);
+  fclose(jf_stream);
+  delete_all();
+  return;
 }
 
 void WriteAllJobs(job_data_t *job_list, struct mw_api_spec *f) {
