@@ -13,10 +13,10 @@
 #include "mw_api.h"
 
 // Must be less than max int!
-#define VECTOR_LENGTH 1000000
-#define N_JOBS  1000
-//#define VECTOR_LENGTH 10
-//#define N_JOBS  3
+#define VECTOR_LENGTH 10000000
+#define N_JOBS  10000
+// #define VECTOR_LENGTH 10
+// #define N_JOBS  3
 
 /***
 Given pointer to vector of doubles and vector length, calculate L2 norm
@@ -308,6 +308,7 @@ struct userdef_result_t *compute_dot (struct userdef_work_t *work) {
   };
   printVector(work->vector, work->length);
   result->product = norm(work->vector, work->length);
+  // printf("calculated %d\n", result->product);
   free(work->vector);
   return result;
 }
