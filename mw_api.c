@@ -169,10 +169,11 @@ mw_work_t **get_next_job(mw_work_t **current_job, int count) {
 }
 
 // Sends 'terminate' command to all worker threads.
-void KillWorkers(int n_proc) {
+void KillWorkers(int n_proc, int rank) {
   int i, dummy;
   MPI_Status status;
   for(i=1; i<n_proc; i++) {
+    if (i == rank) continue;
     MPI_Send(&dummy, 0, MPI_INT, i, TAG_KILL, MPI_COMM_WORLD);
   }
 }
@@ -466,7 +467,7 @@ void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **ar
     }
   }
   // Done; terminate worker threads and calculate result.
-  KillWorkers(n_proc);
+  KillWorkers(n_proc, rank);
 
   // Hacky: Generate temp result queue for now.
   printf("completed jobs: %d\n", DoneQueue.count);
