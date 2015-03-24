@@ -508,10 +508,13 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       // Wait for job.
       timeout_flag = TO_Probe(proc_status.timeout, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
       if (timeout_flag == PROBE_TIMEOUT) {
+        if (proc_status.status == ARB_SENT) {
+          printf("proc %d has seen %d arb packets.\n", rank, arb_count);
+        }
         send_arb_all(n_proc, rank);
         proc_status.status = ARB_SENT;
         proc_status.timeout = ARB_TIMEOUT;
-        printf("Timeout. Process %d thinks %d is lowest\n", rank, lowest_rank);
+        //printf("Timeout. Process %d thinks %d is lowest\n", rank, lowest_rank);
         receive_buffer = NULL;
       } else {
         MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
@@ -521,12 +524,12 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
           arb_count++;
           if(proc_status.status == WORKER) {
             send_arb_all(n_proc, rank);
-            printf("Process %d sent arb packets.\n", rank);
+            //printf("Process %d sent arb packets.\n", rank);
           }
           proc_status.status = ARB_SENT;
           if(source < lowest_rank)lowest_rank = source;
-          printf("Process %d thinks %d is lowest\n", rank, lowest_rank);
-          printf("Process %d has seen %d arb packets.\n", rank, arb_count);
+          //printf("Process %d thinks %d is lowest\n", rank, lowest_rank);
+          //printf("Process %d has seen %d arb packets.\n", rank, arb_count);
         }
         if (status.MPI_TAG == TAG_COMPUTE) {
           proc_status.status = WORKER;
