@@ -10,6 +10,7 @@
 #include <time.h>
 #include "mw_api.h"
 #include "mw_queue.h"
+#include "mw_comms.h"
 
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
@@ -49,9 +50,8 @@ unsigned char random_fail(void) {
   double dice_roll;
   int rank;
   MPI_Comm_rank (MPI_COMM_WORLD, &rank);
-  if (rank == 1) return 0;
   dice_roll = (double)rand() / RAND_MAX;
-  return (dice_roll > 0.9995);
+  return (dice_roll > 0.95);
 }
 
 void assign_job(int dest, job_queue_t *pendingQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
@@ -271,26 +271,24 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
 
     // Init work queues
     mw_work_t **work_queue = f->create(argc, argv);
-    //mw_work_t **next_job = work_queue;
-    //mw_result_t *result_queue[MASTER_QUEUE_LENGTH];
-    //mw_result_t **next_result = result_queue;
-    //result_queue[0] = NULL;
 
     InitializeJobQueue(&PendingQueue, work_queue);
-
-    // Worker status array.
-    unsigned char worker_status[n_proc-1];
 
     // Initialize by giving tasks to all workers.
     for (i=1; i<n_proc; i++) {
       WorkerQPtrs[i-1] = &WorkerQueues[i-1];    //match ptrs
       assign_job(i, &PendingQueue, WorkerQPtrs[i-1], f);
-      worker_status[i-1] = BUSY;
     }
 
     // Loop; give new jobs to workers as they return answers.
     while(1) {
-      MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+      //MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+      int flag;
+      flag = TO_Probe(5000, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+      if (flag==PROBE_TIMEOUT) {
+        printf("Got timeout on probe.\n");
+        break;
+      }
       MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
       source = status.MPI_SOURCE;
       //printf("Got result from process %d of length %d\n", source, length);
@@ -302,7 +300,6 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
             &status);
       temp_job = dequeue(WorkerQPtrs[source-1]);
       if (temp_job != NULL) {
-        //printf("deserializing job %ld.\n", temp_job->job_id);
         if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
           fprintf(stderr, "Error deserializing results on process %d\n", rank);
           return;
@@ -314,22 +311,18 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
         printf("null result from %d\n", source);
       }
       enqueue(&DoneQueue, temp_job);
-      worker_status[source-1] = IDLE;
 
       if (queueEmpty(&PendingQueue)) {
         printf("No more pending work\n");
         for (i=0; i<n_proc-1; i++) {
           if (!queueEmpty(&WorkerQueues[i])) break;
-          //if (worker_status[i]==BUSY) break;
         }
         if (i == (n_proc-1)) break;
         else {
           steal_jobs(i+1, source, &WorkerQueues[i], &WorkerQPtrs[source-1], f);
         }
       } else {
-        //printf("Assigning next job.\n");
         assign_job(source, &PendingQueue, WorkerQPtrs[source-1], f);
-        worker_status[source-1] = BUSY;
       }
     }
     // Done; terminate worker threads and calculate result.
