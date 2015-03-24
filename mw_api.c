@@ -18,6 +18,8 @@
 #define WAIT_TIMEOUT    10000
 #define MASTER_TIMEOUT  5000
 
+#define FAILURE_PROB 0.99965
+
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
 //#define JOBS_PER_PACKET 5
@@ -25,8 +27,6 @@
 /*** Status Codes ***/
 #define WORKER      0x00
 #define ARB_SENT    0x01
-
-#define FAILURE_PROB 0.9997
 
 struct process_status_t {
   int master;
