@@ -14,14 +14,11 @@
 #include "mw_comms.h"
 
 #define WORKER_TIMEOUT  500
-#define ARBITRATION     40000
+#define ARB_TIMEOUT     40000
 
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
 //#define JOBS_PER_PACKET 5
-
-#define TAG_COMPUTE 0
-#define TAG_KILL    1
 
 /*** Status Codes ***/
 #define WORKER      0x00
@@ -40,7 +37,7 @@ void KillWorkers(int n_proc);
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f);
 void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
 int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
-unsigned char random_fail(void);
+unsigned char random_fail(int tag);
 
 unsigned char queueEmpty(job_queue_t *queue) {
   return (queue->count == 0);
@@ -82,7 +79,7 @@ void delete_all() {
 // END Hash Table Stuff
 
 int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
-   if (random_fail()) {      MPI_Finalize();
+   if (random_fail(tag)) {      MPI_Finalize();
     exit (0);
     return 0;
    } else {
@@ -90,12 +87,17 @@ int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_C
    }
 }
 
-unsigned char random_fail(void) {
+unsigned char random_fail(int tag) {
   double dice_roll;
   int rank;
   MPI_Comm_rank (MPI_COMM_WORLD, &rank);
+  if (rank != 0) {
+    if (tag == TAG_COMPUTE) return 0;    // second master
+    if (tag == TAG_KILL) return 0;
+    if (tag == TAG_ARB) return 0;
+  }
   dice_roll = (double)rand() / RAND_MAX;
-  return (dice_roll > 0.95);
+  return (dice_roll > 0.9);
 }
 
 void assign_job(int dest, job_queue_t *pendingQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
@@ -327,7 +329,7 @@ void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
   if (f->serialize_work2(job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
   }
-  MPI_Send(send_buffer, length, MPI_UNSIGNED_CHAR, dest, TAG_COMPUTE, MPI_COMM_WORLD);
+  F_Send(send_buffer, length, MPI_UNSIGNED_CHAR, dest, TAG_COMPUTE, MPI_COMM_WORLD);
   free(send_buffer);
 }
 
@@ -344,7 +346,7 @@ void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_
 }
 
 void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
-  int rank, n_proc, i, length, recov, timeout_flag;
+  int rank, n_proc, i, length, recov, timeout_flag, source;
   unsigned char *receive_buffer;
   MPI_Status status;
 
@@ -372,8 +374,6 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     init_queue(&PendingQueue);
     init_queue(&DoneQueue);
     for (i=0; i< (n_proc-1); i++) init_queue(&WorkerQueues[i]);
-
-    int source;
     double start, end;
     // start timer
     start = MPI_Wtime();
@@ -403,7 +403,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     // Loop; give new jobs to workers as they return answers.
     while(1) {
       timeout_flag = TO_Probe(5000, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-      if (flag==PROBE_TIMEOUT) {
+      if (timeout_flag==PROBE_TIMEOUT) {
         printf("Got timeout on probe.\n");
         break;
       }
@@ -503,25 +503,34 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     proc_status.timeout = WORKER_TIMEOUT;
     proc_status.master = 0;
     proc_status.status = WORKER;
-
+    int arb_count = 0;
     while(1) {
       // Wait for job.
       timeout_flag = TO_Probe(proc_status.timeout, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
       if (timeout_flag == PROBE_TIMEOUT) {
         send_arb_all(n_proc, rank);
-        proc_status.status = ARBITRATION;
+        proc_status.status = ARB_SENT;
+        proc_status.timeout = ARB_TIMEOUT;
+        printf("Timeout. Process %d thinks %d is lowest\n", rank, lowest_rank);
         receive_buffer = NULL;
       } else {
         MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
         source = status.MPI_SOURCE;
         if (status.MPI_TAG == TAG_KILL) break;
         if (status.MPI_TAG == TAG_ARB) {
-          if(proc_status.status == WORKER) send_arb_all(n_proc, rank);
-          proc_status.status = ARBITRATION;
+          arb_count++;
+          if(proc_status.status == WORKER) {
+            send_arb_all(n_proc, rank);
+            printf("Process %d sent arb packets.\n", rank);
+          }
+          proc_status.status = ARB_SENT;
           if(source < lowest_rank)lowest_rank = source;
+          printf("Process %d thinks %d is lowest\n", rank, lowest_rank);
+          printf("Process %d has seen %d arb packets.\n", rank, arb_count);
         }
         if (status.MPI_TAG == TAG_COMPUTE) {
           proc_status.status = WORKER;
+          printf("Got compute tag.\n");
         }
         if (NULL == (receive_buffer = (unsigned char*) malloc(sizeof(unsigned char) * length))) {
           fprintf(stderr, "malloc failed on process %d...\n", rank);
