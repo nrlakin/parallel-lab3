@@ -527,6 +527,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
             //printf("Process %d sent arb packets.\n", rank);
           }
           proc_status.status = ARB_SENT;
+          proc_status.timeout = ARB_TIMEOUT;
           if(source < lowest_rank)lowest_rank = source;
           //printf("Process %d thinks %d is lowest\n", rank, lowest_rank);
           //printf("Process %d has seen %d arb packets.\n", rank, arb_count);
