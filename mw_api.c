@@ -13,6 +13,9 @@
 #include "mw_queue.h"
 #include "mw_comms.h"
 
+#define WORKER_TIMEOUT  500
+#define ARBITRATION     40000
+
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
 //#define JOBS_PER_PACKET 5
@@ -20,9 +23,15 @@
 #define TAG_COMPUTE 0
 #define TAG_KILL    1
 
-/*** Worker Status Codes ***/
-#define IDLE      0x00
-#define BUSY      0x01
+/*** Status Codes ***/
+#define WORKER      0x00
+#define ARB_SENT    0x01
+
+struct process_status_t {
+  int master;
+  int timeout;
+  int status;
+} proc_status;
 
 /*** Local Prototypes ***/
 mw_work_t **get_next_job(mw_work_t **current_job, int count);
@@ -335,7 +344,7 @@ void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_
 }
 
 void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
-  int rank, n_proc, i, length, recov;
+  int rank, n_proc, i, length, recov, timeout_flag;
   unsigned char *receive_buffer;
   MPI_Status status;
 
@@ -393,9 +402,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     write_count = 0;
     // Loop; give new jobs to workers as they return answers.
     while(1) {
-      //MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-      int flag;
-      flag = TO_Probe(5000, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+      timeout_flag = TO_Probe(5000, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
       if (flag==PROBE_TIMEOUT) {
         printf("Got timeout on probe.\n");
         break;
@@ -409,12 +416,10 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
       };
       MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, MPI_ANY_TAG, MPI_COMM_WORLD,
             &status);
-      // printf("received\n");
       temp_job = dequeue(WorkerQPtrs[source-1]);
-      // printf("got work\n");
 
       char* mode = "ab";
-      if (write_count == 0 && recov == 0) mode = "wb";
+      if (write_count == 0 && rank == 0) mode = "wb";
       result_jf_stream = fopen("results.txt", mode);
       write_count++;
       // printf("Writing Results\n");
@@ -494,41 +499,63 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     work_queue[0] = NULL;
     result_queue[0] = NULL;
     int count = 0;
+    int lowest_rank = rank;
+    proc_status.timeout = WORKER_TIMEOUT;
+    proc_status.master = 0;
+    proc_status.status = WORKER;
 
     while(1) {
       // Wait for job.
-      MPI_Probe(0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-      MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
-      if (status.MPI_TAG == TAG_KILL) break;
-      if (NULL == (receive_buffer = (unsigned char*) malloc(sizeof(unsigned char) * length))) {
-        fprintf(stderr, "malloc failed on process %d...", rank);
-        return;
-      };
-      MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, 0, TAG_COMPUTE, MPI_COMM_WORLD,
+      timeout_flag = TO_Probe(proc_status.timeout, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+      if (timeout_flag == PROBE_TIMEOUT) {
+        send_arb_all(n_proc, rank);
+        proc_status.status = ARBITRATION;
+        receive_buffer = NULL;
+      } else {
+        MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
+        source = status.MPI_SOURCE;
+        if (status.MPI_TAG == TAG_KILL) break;
+        if (status.MPI_TAG == TAG_ARB) {
+          if(proc_status.status == WORKER) send_arb_all(n_proc, rank);
+          proc_status.status = ARBITRATION;
+          if(source < lowest_rank)lowest_rank = source;
+        }
+        if (status.MPI_TAG == TAG_COMPUTE) {
+          proc_status.status = WORKER;
+        }
+        if (NULL == (receive_buffer = (unsigned char*) malloc(sizeof(unsigned char) * length))) {
+          fprintf(stderr, "malloc failed on process %d...\n", rank);
+          return;
+        };
+        MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, status.MPI_TAG, MPI_COMM_WORLD,
           &status);
-      // Deserialize new jobs.
-      if (f->deserialize_work(work_queue, receive_buffer, length) == 0) {
-        fprintf(stderr, "Error deserializing work on process %d.\n", rank);
-        return;
       }
-      free(receive_buffer);
-      // Process new jobs.
-      while(*next_job != NULL) {
-        *next_result++ = f->compute(*next_job++);
-        count++;
-      }
-      *next_result=NULL;              // terminate new result queue.
-      next_job = work_queue;
-      while(*next_job != NULL) {      // free work structures on finishing calculation.
-        free(*next_job++);
-      }
-      // Send results to master.
-      SendResults(0, result_queue, count, f);
-      next_result = result_queue;
-      while(*next_result != NULL) {
-        free(*next_result++);
+      if (proc_status.status == WORKER) {
+        // Deserialize new jobs.
+        if (f->deserialize_work(work_queue, receive_buffer, length) == 0) {
+          fprintf(stderr, "Error deserializing work on process %d.\n", rank);
+          return;
+        }
+
+        // Process new jobs.
+        while(*next_job != NULL) {
+          *next_result++ = f->compute(*next_job++);
+          count++;
+        }
+        *next_result=NULL;              // terminate new result queue.
+        next_job = work_queue;
+        while(*next_job != NULL) {      // free work structures on finishing calculation.
+          free(*next_job++);
+        }
+        // Send results to master.
+        SendResults(0, result_queue, count, f);
+        next_result = result_queue;
+        while(*next_result != NULL) {
+          free(*next_result++);
+        }
       }
       // Reset pointers
+      if (receive_buffer) free(receive_buffer);
       next_result = result_queue;
       next_job = work_queue;
       *next_job = NULL;
