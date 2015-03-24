@@ -36,7 +36,7 @@ struct process_status_t {
 
 /*** Local Prototypes ***/
 mw_work_t **get_next_job(mw_work_t **current_job, int count);
-void KillWorkers(int n_proc);
+void KillWorkers(int n_proc, int rank);
 //void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f);
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f);
 void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
