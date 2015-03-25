@@ -13,16 +13,18 @@
 #include "mw_queue.h"
 #include "mw_comms.h"
 
-#define WORKER_TIMEOUT  1000
-#define ARB_TIMEOUT     8000
-#define WAIT_TIMEOUT    15000
-#define MASTER_TIMEOUT  5000
+/*** Controllable Timeout Variables ***/
+#define WORKER_TIMEOUT  1000  // timeout for workers waiting to hear from a master
+#define ARB_TIMEOUT     8000  // timeout for workers while waiting for arbitration to resolve
+#define WAIT_TIMEOUT    15000 // timeout for workers waiting for new master to initialize
+#define MASTER_TIMEOUT  5000  // timeout for master waiting to hear from morkers
 
-#define FAILURE_PROB 0.99965
+/*** Controllable Probability for Success ***/
+#define FAILURE_PROB 0.9999
 
+/*** Result Queue Max Size ***/
 #define WORKER_QUEUE_LENGTH 1001
 #define MASTER_QUEUE_LENGTH 10001
-//#define JOBS_PER_PACKET 5
 
 /*** Status Codes ***/
 #define WORKER      0x00
@@ -37,25 +39,26 @@ struct process_status_t {
 /*** Local Prototypes ***/
 mw_work_t **get_next_job(mw_work_t **current_job, int count);
 void KillWorkers(int n_proc, int rank);
-//void SendWork(int dest, mw_work_t **first_job, int n_jobs, struct mw_api_spec *f);
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f);
 void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
 int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
 unsigned char random_fail(int tag);
 
+// returns whether queue is empty
 unsigned char queueEmpty(job_queue_t *queue) {
   return (queue->count == 0);
 }
 
-// BEGIN Hash Table Stuff
+// Hash Table Implementation used: uthash
+// Declare and initializea struct for the hash table
 struct my_struct {
   unsigned long id;                    /* key */
   int count;
   UT_hash_handle hh;         /* makes this structure hashable */
 };
-
 struct my_struct *ids = NULL;
 
+// Helper Functions for adding, finding, and emptying the hash table
 void add_id(unsigned long input_id, int count) {
   struct my_struct *s;
   HASH_FIND(hh, ids, &input_id, sizeof(unsigned long), s);  /* id already in the hash? */
@@ -66,13 +69,11 @@ void add_id(unsigned long input_id, int count) {
   }
   s->count = count;
 }
-
 struct my_struct *find_id(unsigned long input_id) {
   struct my_struct *s;
   HASH_FIND(hh, ids, &input_id, sizeof(unsigned long), s);  /* s: output pointer */
   return s;
 }
-
 void delete_all() {
   struct my_struct *current_id, *tmp;
   HASH_ITER(hh, ids, current_id, tmp) {
@@ -80,8 +81,8 @@ void delete_all() {
     free(current_id);            /* free it */
   }
 }
-// END Hash Table Stuff
 
+// Non-Blocking Send Function that uses random_fail to create failure cases
 int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
   MPI_Request request;
    if (random_fail(tag)) {
@@ -94,6 +95,9 @@ int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_C
    }
 }
 
+// RNG function to determine whether failure happens
+// has exceptions for: second master (based on given only one master failure assumption)
+// and the arbitration process
 unsigned char random_fail(int tag) {
   double dice_roll;
   int rank;
@@ -107,6 +111,9 @@ unsigned char random_fail(int tag) {
   return (dice_roll > FAILURE_PROB);
 }
 
+// Function move jobs from one work queue to another and send to the specified destination
+// Dequeues a node from the pending work queue, sends it, and enqueues to the workers queue
+// has an exception if no work is found in the pending queue
 void assign_job(int dest, job_queue_t *pendingQPtr, job_queue_t *workerQPtr, struct mw_api_spec *f) {
   job_data_t *node;
   node = dequeue(pendingQPtr);
@@ -115,6 +122,7 @@ void assign_job(int dest, job_queue_t *pendingQPtr, job_queue_t *workerQPtr, str
   enqueue(workerQPtr, node);
 }
 
+// Function for one worker to take over another worker's queue (includes the send)
 int steal_jobs(int src_proc, int dest_proc, job_queue_t *srcQ, job_queue_t **destQptr, struct mw_api_spec *f) {
   job_queue_t *srcPtr = srcQ;
   job_queue_t *destPtr = *destQptr;
@@ -131,6 +139,7 @@ int steal_jobs(int src_proc, int dest_proc, job_queue_t *srcQ, job_queue_t **des
   return 0;
 }
 
+// Initialize ffunction for mallocing and creating the Job Queue
 void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
   mw_work_t **next_work = work_queue;
   job_data_t *job_ptr;
@@ -148,6 +157,7 @@ void InitializeJobQueue(job_queue_t * queuePtr, mw_work_t **work_queue) {
   }
 }
 
+// Garbage collection for Job Queue Structure
 void ClearJobQueue(job_data_t * job_queue) {
   job_data_t *next_job, *job_ptr = job_queue;
   while(job_ptr != NULL) {
@@ -178,6 +188,8 @@ void KillWorkers(int n_proc, int rank) {
   }
 }
 
+// Write job to file with the given file stream
+// Writes each job to file in the following order: job_id, length of bytestream, serialized job
 void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
   unsigned char * byte_stream;
   int length;
@@ -187,6 +199,7 @@ void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
   }
   // printf("Serializing job_id %ld\n", job_ptr->job_id);
   fwrite(&(job_ptr->job_id), 1, sizeof(unsigned long), jf_stream);
+  // uses special serialize_work2 (userdefined serialize one work struct function)
   if (f->serialize_work2(job_ptr->work_ptr, &byte_stream, &length) == 0) {
     fprintf(stdout, "Error serializing work on master process.\n");
   }
@@ -197,6 +210,10 @@ void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
   return;
 }
 
+// Read one job from file with the the given filestream
+// mallocs space for: the job structure as well as the work
+// Reads and deserialiezs the work associated with the job and attaches it to the job structure
+// sets result_ptr and next_job to null
 long int ReadJob(FILE * jf_stream, long int offset, job_data_t **new_job, struct mw_api_spec *f) {
   long int bytes_read = 0;
   unsigned long temp_job_id;
@@ -227,6 +244,8 @@ long int ReadJob(FILE * jf_stream, long int offset, job_data_t **new_job, struct
   return bytes_read;
 }
 
+// Write result to file with the given file stream
+// Writes each result to file in the following order: job_id, length of bytestream, serialized result
 void WriteResult(FILE * jf_stream, job_data_t *job_ptr, unsigned char *byte_stream, int length) {
   if (jf_stream == NULL) {
     fprintf(stderr, "Error writing to job file.\n");
@@ -239,10 +258,12 @@ void WriteResult(FILE * jf_stream, job_data_t *job_ptr, unsigned char *byte_stre
   fwrite(&length, 1, sizeof(int), jf_stream);
   // printf("%s\n", byte_stream);
   fwrite(byte_stream, 1, length, jf_stream);
-
   return;
 }
 
+// Read result from file with the given file stream
+// Reads each result to file. Mallocs space for new job struct and result stream attaching it to result_ptr
+// sets work_ptr and next_job to null
 long int ReadResult(FILE * jf_stream, long int offset, job_data_t **new_job, struct mw_api_spec *f) {
   long int bytes_read = 0;
   unsigned long temp_job_id;
@@ -273,6 +294,8 @@ long int ReadResult(FILE * jf_stream, long int offset, job_data_t **new_job, str
   return bytes_read;
 }
 
+// Function which opens results.txt and pool.txt and rebuilts pending and result queue
+// uses uthash hash table to perform diff between completed and work pool to create pending
 int RebuildQueues(job_queue_t *pendingPtr, job_queue_t *resultPtr, struct mw_api_spec *f) {
   long int bytes_read, offset = 0;
   FILE * jf_stream;
@@ -304,6 +327,8 @@ int RebuildQueues(job_queue_t *pendingPtr, job_queue_t *resultPtr, struct mw_api
       if (find_id(new_job->job_id) == NULL) {
         // printf("Not Found in Hash\n");
         enqueue(pendingPtr, new_job);
+      } else {
+        free(new_job);
       }
     }
     offset += bytes_read;
@@ -313,6 +338,7 @@ int RebuildQueues(job_queue_t *pendingPtr, job_queue_t *resultPtr, struct mw_api
   return 1;
 }
 
+// Iterates through initial job_queue and writes it to disk (pool.txt)
 void WriteAllJobs(job_data_t *first_job, struct mw_api_spec *f) {
   FILE * job_record;
   job_data_t *temp = first_job;
@@ -353,58 +379,57 @@ void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_
   free(send_buffer);
 }
 
+// Master state function
+// Contains code to initialize, recover, and operate a master processor
 void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **argv) {
   int i, length, timeout_flag, source;
   unsigned char *receive_buffer;
   MPI_Status status;
 
+  // Initialize Queues
   job_queue_t PendingQueue, DoneQueue;
   job_queue_t WorkerQueues[n_proc-1];
   job_queue_t *WorkerQPtrs[n_proc-1];
   job_data_t *temp_job;
   mw_result_t **result_queue;
-
   init_queue(&PendingQueue);
   init_queue(&DoneQueue);
   for (i=0; i< (n_proc-1); i++) init_queue(&WorkerQueues[i]);
-  double start, end;
-  // start timer
-  // start = MPI_Wtime();
   mw_work_t **work_queue = NULL;
 
-  // Init work queues
+  // double start, end;
+  // start timer
+  // start = MPI_Wtime();
+
+  // Initialize Work / Results Queues
+  // rank = 0 corresponds to first master operation - creates work pool in this case
+  // otherwise rebuilds the queues with the helper function RebuildQueues
+  FILE * result_jf_stream;
   if (rank == 0) {
     printf("Initializing Work, Rank 0\n");
     work_queue = f->create(argc, argv);
     InitializeJobQueue(&PendingQueue, work_queue);
     WriteAllJobs(PendingQueue.first, f);
+    // initialize a new result file if rank is 0
+    result_jf_stream = fopen("results.txt", "wb");
+    fclose(result_jf_stream);
   } else {
     printf("Rebuilding Work, Rank %d\n", rank);
     RebuildQueues(&PendingQueue, &DoneQueue, f);
   }
 
-  FILE * result_jf_stream;
-  if (rank == 0) {
-    result_jf_stream = fopen("results.txt", "wb");
-    fclose(result_jf_stream);
-  }
-
   // Initialize by giving tasks to all workers.
   for (i=1; i<n_proc; i++) {
     WorkerQPtrs[i-1] = &WorkerQueues[i-1];    //match ptrs
-    if (i == rank) {
-      continue;
-    }
+    if (i == rank) continue;                  // don't assign work to yourself
     assign_job(i, &PendingQueue, WorkerQPtrs[i-1], f);
   }
 
   // Loop; give new jobs to workers as they return answers.
   while(1) {
     timeout_flag = TO_Probe(MASTER_TIMEOUT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-    if (timeout_flag==PROBE_TIMEOUT) {
-      printf("Got timeout on probe.\n");
-      break;
-    }
+    // check for worker no-response
+    if (timeout_flag==PROBE_TIMEOUT) break;
     MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
     source = status.MPI_SOURCE;
     if (NULL == (receive_buffer = (unsigned char*) malloc(sizeof(unsigned char) * length))) {
@@ -416,21 +441,12 @@ void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **ar
     if (status.MPI_TAG == TAG_RESULT) {
       // printf("Got result from process %d of length %d\n", source, length);
       // printf("Source %d, Current master %d\n", source, rank);
-      /*
-      This if statement fixes the following discovered bug : dequeuing an empty Queue after starting stealing -- general pattern
-      Assigned 1's queue to 4.
-      Assigned 1's queue to 5.
-      Assigned 1's queue to 6.
-      Assigned 1's queue to 7.
-      Assigned 3's queue to 4.
-      Got reply from 5
-      Attempted dequeue of empty queue.
-      */
+
+      // this if-else statement handles the case where a worker has stolen work from a dead worker
       if (!queueEmpty(WorkerQPtrs[source-1])) {
         temp_job = dequeue(WorkerQPtrs[source-1]);
-
+        // write results as they come
         result_jf_stream = fopen("results.txt", "ab");
-        // printf("length: %d\n", length);
         WriteResult(result_jf_stream, temp_job, receive_buffer, length);
         fclose(result_jf_stream);
 
@@ -446,11 +462,11 @@ void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **ar
 
       free(receive_buffer);
       // Move job to DoneQueue.
-      if (temp_job == NULL) {
-        printf("null result from %d\n", source);
-      }
       enqueue(&DoneQueue, temp_job);
 
+      // after results have been processed - assign a new job to the returning worker
+      // if pending queue is empty -  stealing pending jobs
+      // else - give a job off of pending queue
       if (queueEmpty(&PendingQueue)) {
         // printf("No more pending work\n");
         for (i=0; i<n_proc-1; i++) {
@@ -468,14 +484,12 @@ void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **ar
   }
   // Done; terminate worker threads and calculate result.
   KillWorkers(n_proc, rank);
-
   // Hacky: Generate temp result queue for now.
   printf("completed jobs: %d\n", DoneQueue.count);
   if (NULL == (result_queue = (mw_result_t**) malloc(sizeof(mw_result_t*) * (DoneQueue.count+1)))) {
     fprintf(stderr, "malloc failed on process %d...", rank);
     return;
   };
-
   job_data_t * temp = DoneQueue.first;
   mw_result_t ** resPtr = result_queue;
   while (temp != NULL) {
@@ -486,11 +500,13 @@ void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **ar
   *resPtr = NULL; //terminate
   // </hack>
 
+  // calculate results
   printf("Calculating result.\n");
   if (f->result(result_queue) == 0) {
     fprintf(stderr, "Error in user-defined result calculation.\n");
     return;
   }
+
   // end timer
   // end = MPI_Wtime();
   // printf("%f seconds elapsed.\n", end-start);
@@ -521,8 +537,8 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     return;
   }
 
-  // Master program.
   if (rank == 0) {
+    // Master program.
     InitMaster(n_proc, rank, f, argc, argv);
   } else {
     // Worker program.
@@ -534,16 +550,20 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
     result_queue[0] = NULL;
     int count = 0;
     int lowest_rank = rank;
+    // set default worker timeout, master, and status
     proc_status.timeout = WORKER_TIMEOUT;
     proc_status.master = 0;
     proc_status.status = WORKER;
-    int arb_count = 0;
     while(1) {
-      // Wait for job.
+      // Wait for job - probe for master timeout
       timeout_flag = TO_Probe(proc_status.timeout, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+      // State machine handling different worker states
       if (timeout_flag == PROBE_TIMEOUT) {
+        // timeout has been detected
         if (proc_status.status == ARB_SENT) {
-          // printf("proc %d has seen %d arb packets.\n", rank, arb_count);
+          // arbitration packet has already been sent
+          // lowest rank takes over mater operation (and breaks when master is done)
+          // otherwise wait for new master to give work
           if (rank == lowest_rank) {
             printf("Process %d is becoming master\n", rank);
             InitMaster(n_proc, rank, f, argc, argv);
@@ -554,28 +574,31 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
             proc_status.timeout = WAIT_TIMEOUT;
           }
         }
+        // send your arbitration status to all other workers, set state, and set timeout to arbitration
         send_arb_all(n_proc, rank);
         proc_status.status = ARB_SENT;
         proc_status.timeout = ARB_TIMEOUT;
         //printf("Timeout. Process %d thinks %d is lowest\n", rank, lowest_rank);
         receive_buffer = NULL;
       } else {
+        // timeout has not been detected
         MPI_Get_count(&status, MPI_UNSIGNED_CHAR, &length);
         source = status.MPI_SOURCE;
-        if (status.MPI_TAG == TAG_KILL) break;
+        if (status.MPI_TAG == TAG_KILL) break;    // handle kill tag
         if (status.MPI_TAG == TAG_ARB) {
-          arb_count++;
+          // if arbitration packet is received, send arbitration packet out and set status/timeout to arbitration
           if(proc_status.status == WORKER) {
             send_arb_all(n_proc, rank);
             //printf("Process %d sent arb packets.\n", rank);
           }
           proc_status.status = ARB_SENT;
           proc_status.timeout = ARB_TIMEOUT;
+          // reset lowest_rank tracker
           if(source < lowest_rank)lowest_rank = source;
           //printf("Process %d thinks %d is lowest\n", rank, lowest_rank);
-          //printf("Process %d has seen %d arb packets.\n", rank, arb_count);
         }
         if (status.MPI_TAG == TAG_COMPUTE) {
+          // new message has been received from master, reset status/master/timeout and continue as worker
           // printf("Process %d is falling back to worker\n", rank);
           proc_status.status = WORKER;
           proc_status.master = source;
@@ -589,6 +612,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
         MPI_Recv(receive_buffer, length, MPI_UNSIGNED_CHAR, source, status.MPI_TAG, MPI_COMM_WORLD,
           &status);
       }
+      // still a worker - proceed with worker action
       if (proc_status.status == WORKER) {
         // Deserialize new jobs.
         if (f->deserialize_work(work_queue, receive_buffer, length) == 0) {

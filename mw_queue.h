@@ -8,8 +8,6 @@
 #define _MW_QUEUE_H_
 
 #include "mw_api.h"
-//typedef struct userdef_work_t mw_work_t;
-//typedef struct userdef_result_t mw_result_t;
 
 typedef struct job_data_t job_data_t;
 struct job_data_t {

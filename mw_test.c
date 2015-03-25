@@ -13,7 +13,7 @@
 #include "mw_api.h"
 
 // Must be less than max int!
-#define VECTOR_LENGTH 100000000
+#define VECTOR_LENGTH 10000000
 #define N_JOBS  10000
 // #define VECTOR_LENGTH 10
 // #define N_JOBS  3
