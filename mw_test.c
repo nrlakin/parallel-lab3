@@ -348,18 +348,11 @@ int main(int argc, char **argv) {
   f.create = create_jobs;
   f.result = dot_product_result;
   f.compute = compute_dot;
-  f.serialize_work = serialize_jobs;
-  f.serialize_work2 = serialize_job;
-  f.deserialize_work = deserialize_jobs;
-  f.deserialize_work2 = deserialize_job;
-  f.serialize_results = serialize_results;
-  f.serialize_results2 = serialize_result;
-  f.deserialize_results = deserialize_results;
-  f.deserialize_results2 = deserialize_result;
+  f.serialize_work = serialize_job;
+  f.deserialize_work = deserialize_job;
+  f.serialize_result = serialize_result;
+  f.deserialize_result = deserialize_result;
   f.cleanup = cleanup;
-  f.clean_work = clean_work;
-  f.clean_result = clean_result;
-  f.jobs_per_packet = 1;
 
   // Run job.
   MW_Run(argc, argv, &f);

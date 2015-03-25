@@ -15,7 +15,7 @@ void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
   job_data_t *old_last = queuePtr->last;
   // Scan to end of list if necessary
   if (nodePtr == NULL) {
-    printf("Attempted to queue NULL node.\n");
+    //printf("Attempted to queue NULL node.\n");
     return;
   }
   if (queuePtr->first == NULL) {
@@ -31,7 +31,7 @@ void enqueue(job_queue_t *queuePtr, job_data_t *nodePtr) {
 // Returns the head job_queue_t node of the queue - first node of the linkedlist
 job_data_t * dequeue(job_queue_t *queuePtr) {
   if (queuePtr->first == NULL) {
-    printf("Attempted dequeue of empty queue.\n");
+    //printf("Attempted dequeue of empty queue.\n");
     return NULL;
   }
   job_data_t *node = queuePtr->first;

@@ -20,7 +20,7 @@
 #define MASTER_TIMEOUT  5000  // timeout for master waiting to hear from morkers
 
 /*** Controllable Probability for Success ***/
-#define FAILURE_PROB 0.9999
+#define SUCCESS_PROB  0.99995
 
 /*** Result Queue Max Size ***/
 #define WORKER_QUEUE_LENGTH 1001
@@ -40,7 +40,8 @@ struct process_status_t {
 mw_work_t **get_next_job(mw_work_t **current_job, int count);
 void KillWorkers(int n_proc, int rank);
 void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f);
-void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
+//void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f);
+void SendResults(int dest, mw_result_t *result, struct mw_api_spec *f);
 int F_Send(void *buf, int count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
 unsigned char random_fail(int tag);
 
@@ -108,7 +109,7 @@ unsigned char random_fail(int tag) {
     if (tag == TAG_ARB) return 0;
   }
   dice_roll = (double)rand() / RAND_MAX;
-  return (dice_roll > FAILURE_PROB);
+  return (dice_roll > SUCCESS_PROB);
 }
 
 // Function move jobs from one work queue to another and send to the specified destination
@@ -200,7 +201,7 @@ void WriteJob(FILE * jf_stream, job_data_t *job_ptr, struct mw_api_spec *f) {
   // printf("Serializing job_id %ld\n", job_ptr->job_id);
   fwrite(&(job_ptr->job_id), 1, sizeof(unsigned long), jf_stream);
   // uses special serialize_work2 (userdefined serialize one work struct function)
-  if (f->serialize_work2(job_ptr->work_ptr, &byte_stream, &length) == 0) {
+  if (f->serialize_work(job_ptr->work_ptr, &byte_stream, &length) == 0) {
     fprintf(stdout, "Error serializing work on master process.\n");
   }
   // printf("serialized job\n");
@@ -236,7 +237,7 @@ long int ReadJob(FILE * jf_stream, long int offset, job_data_t **new_job, struct
     return 0;
   };
   bytes_read += fread(byte_stream, 1, sizeof(unsigned char) * work_size,jf_stream);
-  f->deserialize_work2(&((*new_job)->work_ptr), byte_stream, work_size);
+  f->deserialize_work(&((*new_job)->work_ptr), byte_stream, work_size);
   free(byte_stream);
   (*new_job)->result_ptr = NULL;
   (*new_job)->next_job = NULL;
@@ -286,7 +287,7 @@ long int ReadResult(FILE * jf_stream, long int offset, job_data_t **new_job, str
     return 0;
   };
   bytes_read += fread(byte_stream, 1, sizeof(unsigned char) * result_size, jf_stream);
-  f->deserialize_results2(&((*new_job)->result_ptr), byte_stream, result_size);
+  f->deserialize_result(&((*new_job)->result_ptr), byte_stream, result_size);
   (*new_job)->work_ptr = NULL;
   (*new_job)->next_job = NULL;
   free(byte_stream);
@@ -357,7 +358,7 @@ void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
   int length;
   //printf("in SendWork\n");
   //  if (f->serialize_work(first_job, n_jobs, &send_buffer, &length) == 0) {
-  if (f->serialize_work2(job, &send_buffer, &length) == 0) {
+  if (f->serialize_work(job, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing work on master process.\n");
   }
   // printf("done serializing %d\n", dest);
@@ -368,10 +369,10 @@ void SendWork(int dest, mw_work_t *job, struct mw_api_spec *f) {
 }
 
 // Send n_results to process of rank 'dest'.
-void SendResults(int dest, mw_result_t **first_result, int n_results, struct mw_api_spec *f) {
+void SendResults(int dest, mw_result_t *result, struct mw_api_spec *f) {
   unsigned char *send_buffer;
   int length;
-  if (f->serialize_results(first_result, n_results, &send_buffer, &length) == 0) {
+  if (f->serialize_result(result, &send_buffer, &length) == 0) {
     fprintf(stderr, "Error serializing results.\n");
   }
   // MPI_Send(send_buffer, length, MPI_UNSIGNED_CHAR, proc_status.master, TAG_RESULT, MPI_COMM_WORLD);
@@ -451,7 +452,7 @@ void InitMaster(int n_proc, int rank, struct mw_api_spec *f, int argc, char **ar
         fclose(result_jf_stream);
 
         if (temp_job != NULL) {
-          if (f->deserialize_results2(&(temp_job->result_ptr), receive_buffer, length) == 0) {
+          if (f->deserialize_result(&(temp_job->result_ptr), receive_buffer, length) == 0) {
             fprintf(stderr, "Error deserializing results on process %d\n", rank);
             return;
           }
@@ -623,7 +624,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
         // Process new jobs.
         while(*next_job != NULL) {
           *next_result++ = f->compute(*next_job++);
-          count++;
+          //count++;
         }
         *next_result=NULL;              // terminate new result queue.
         next_job = work_queue;
@@ -631,7 +632,7 @@ void MW_Run(int argc, char **argv, struct mw_api_spec *f) {
           free(*next_job++);
         }
         // Send results to master.
-        SendResults(proc_status.master, result_queue, count, f);
+        SendResults(proc_status.master, *result_queue, f);
         next_result = result_queue;
         while(*next_result != NULL) {
           free(*next_result++);

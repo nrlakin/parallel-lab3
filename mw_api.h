@@ -22,17 +22,17 @@ struct mw_api_spec {
   int (*result) (mw_result_t **res);
   mw_result_t *(*compute) (mw_work_t *work);
   int (*cleanup) (mw_work_t **work, mw_result_t **results);
-  int (*clean_work) (mw_work_t *work);
-  int (*clean_result) (mw_result_t *result);
-  int (*serialize_work) (mw_work_t **start_job, int n_jobs, unsigned char **array, int *len);
   int (*deserialize_work) (mw_work_t **queue, unsigned char *array, int len);
-  int (*deserialize_work2) (mw_work_t **queue, unsigned char *array, int len);
-  int (*serialize_work2) (mw_work_t *jobPtr, unsigned char **array, int *len);
-  int (*serialize_results) (mw_result_t **start_result, int n_results, unsigned char **array, int *len);
-  int (*serialize_results2) (mw_result_t *resultPtr, unsigned char **array, int *len);
-  int (*deserialize_results) (mw_result_t **queue, unsigned char *array, int len);
-  int (*deserialize_results2)(mw_result_t **resultPtrPtr, unsigned char *array, int len);
-  int jobs_per_packet;
+  int (*serialize_work) (mw_work_t *jobPtr, unsigned char **array, int *len);
+  int (*serialize_result) (mw_result_t *resultPtr, unsigned char **array, int *len);
+  int (*deserialize_result)(mw_result_t **resultPtrPtr, unsigned char *array, int len);
+
+  /*** Dead API prototypes, kept as reference.  ***/
+  //int jobs_per_packet;
+  //int (*serialize_work) (mw_work_t **start_job, int n_jobs, unsigned char **array, int *len);
+  //int (*deserialize_work) (mw_work_t **queue, unsigned char *array, int len);
+  //int (*serialize_results) (mw_result_t **start_result, int n_results, unsigned char **array, int *len);
+  //int (*deserialize_results) (mw_result_t **queue, unsigned char *array, int len);
 };
 
 void MW_Run(int argc, char **argv, struct mw_api_spec *f);
